@@ -1,0 +1,3 @@
+// This interface is provided by the framework — no custom definition needed.
+// Inject as: ILogger<MyService> _logger
+// Log structured data: _logger.LogInformation("Login attempt for {Username}", username);

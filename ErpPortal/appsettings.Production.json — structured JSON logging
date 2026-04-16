@@ -1,0 +1,8 @@
+// appsettings.Production.json — structured JSON logging
+{
+  "Logging": {
+    "Console": {
+      "FormatterName": "json"
+    }
+  }
+}

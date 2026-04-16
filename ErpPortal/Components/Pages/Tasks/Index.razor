@@ -1,0 +1,112 @@
+@page "/tasks"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@attribute [OutputCache(PolicyName = "TodosList")]
+@inject IRepository<Todo> TodoRepo
+
+<PageTitle>Task Management</PageTitle>
+
+<MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudStack Row="true" AlignItems="AlignItems.Baseline">
+        <MudText Typo="Typo.h4">Task Management</MudText>
+        @if (_todos is not null)
+        {
+            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                (@_todos.Count tasks — virtualized)
+            </MudText>
+        }
+    </MudStack>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add">Add Task</MudButton>
+</MudStack>
+
+@if (_isLoading)
+{
+    <MudSkeleton Height="600px" />
+}
+else if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error">@_error</MudAlert>
+}
+else
+{
+    @* Scrollable container for the virtualizer *@
+    <MudPaper Elevation="2" Style="height:600px;overflow-y:auto;">
+        @* <Virtualize> renders only the visible rows into the DOM.
+           Equivalent of rowVirtualizer.getVirtualItems() — no third-party package required. *@
+        <Virtualize Items="_todos" Context="todo" ItemSize="55" OverscanCount="10">
+            <div style="display:flex;align-items:center;padding:0 16px;height:55px;
+                        border-bottom:1px solid var(--mud-palette-divider);">
+                <MudText Typo="Typo.body2" 
+                         Style="@($"flex:1; {(todo.Completed ? "text-decoration:line-through" : "")}")"
+                         Class="@(todo.Completed ? "mud-text-disabled" : "")">
+                    @todo.TodoText
+                </MudText>
+
+                <MudChip T="string" Color="@(todo.Completed ? Color.Success : Color.Default)"
+                         Size="Size.Small"
+                         OnClick="@(() => HandleToggleAsync(todo))"
+                         Class="mr-3">
+                    @(todo.Completed ? "Completed" : "Pending")
+                </MudChip>
+
+                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                               Color="Color.Error"
+                               Size="Size.Small"
+                               OnClick="@(() => OpenDeleteConfirm(todo))" />
+            </div>
+        </Virtualize>
+    </MudPaper>
+}
+
+@* Delete confirmation dialog *@
+<MudDialog @bind-Visible="_deleteConfirmOpen">
+    <TitleContent><MudText Typo="Typo.h6">Delete Task</MudText></TitleContent>
+    <DialogContent>
+        <MudText>Are you sure you want to delete this task?</MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _deleteConfirmOpen = false)">Cancel</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled" OnClick="HandleDeleteAsync">Delete</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private List<Todo> _todos = [];
+    private bool _isLoading, _deleteConfirmOpen;
+    private string? _error;
+    private Todo? _todoToDelete;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            (IReadOnlyList<Todo> data, int _) = await TodoRepo.GetAllAsync(0, 150);
+            _todos = [.. data];
+        }
+        catch (Exception e) { _error = e.Message; }
+        finally { _isLoading = false; }
+    }
+
+    private async Task HandleToggleAsync(Todo todo)
+    {
+        Todo updated = await TodoRepo.UpdateAsync(todo.Id, todo with { Completed = !todo.Completed });
+        int index   = _todos.FindIndex(t => t.Id == todo.Id);
+        if (index >= 0) _todos[index] = updated;
+    }
+
+    private void OpenDeleteConfirm(Todo todo)
+    {
+        _todoToDelete = todo;
+        _deleteConfirmOpen = true;
+    }
+
+    private async Task HandleDeleteAsync()
+    {
+        if (_todoToDelete is null) return;
+        await TodoRepo.DeleteAsync(_todoToDelete.Id);
+        _todos.RemoveAll(t => t.Id == _todoToDelete.Id);
+        _deleteConfirmOpen = false;
+    }
+}

@@ -1,0 +1,15 @@
+// In Program.cs — add after app.UseStaticFiles()
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["X-Frame-Options"]        = "DENY";
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["Referrer-Policy"]        = "no-referrer";
+    // context.Response.Headers["Content-Security-Policy"] =
+    //     "default-src 'self'; " +
+    //     "script-src 'self'; " +
+    //     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    //     "font-src 'self' https://fonts.gstatic.com; " +
+    //     "img-src 'self' data: https:; " +
+    //     "connect-src 'self' https://dummyjson.com;";
+    await next();
+});

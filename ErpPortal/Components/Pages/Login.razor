@@ -1,0 +1,70 @@
+@page "/login"
+@attribute [ExcludeFromInteractiveRouting]
+@using Microsoft.AspNetCore.Antiforgery
+@using Microsoft.Extensions.Options
+@inject IAntiforgery Antiforgery
+@inject IOptions<BrandingConfig> BrandingOptions
+@layout ErpPortal.Components.Layout.MainLayout
+
+<PageTitle>Sign In — @BrandingOptions.Value.CompanyName</PageTitle>
+
+<form method="post" action="/account/login">
+    <input type="hidden" name="__RequestVerificationToken" value="@AntiforgeryToken" />
+
+    @* Mud inputs still submit standard form field names for controller model binding *@
+    <MudTextField @bind-Value="Model.Username"
+                  UserAttributes="@(new Dictionary<string, object>
+                  {
+                      ["name"] = "Username",
+                      ["autocomplete"] = "username"
+                  })" />
+
+    <MudTextField @bind-Value="Model.Password"
+                  InputType="InputType.Password"
+                  UserAttributes="@(new Dictionary<string, object>
+                  {
+                      ["name"] = "Password",
+                      ["autocomplete"] = "current-password"
+                  })" />
+
+    <MudCheckBox @bind-Value="Model.RememberMe"
+                 UserAttributes="@(new Dictionary<string, object>
+                 {
+                     ["name"] = "RememberMe",
+                     ["value"] = "true"
+                 })" />
+
+    <MudButton ButtonType="ButtonType.Submit">Sign In</MudButton>
+</form>
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    private string? Error { get; set; }
+
+    private LoginModel Model { get; set; } = new();
+    private string? _errorMessage;
+    private string? AntiforgeryToken =>
+        HttpContext is null
+            ? null
+            : Antiforgery.GetAndStoreTokens(HttpContext).RequestToken;
+
+    protected override void OnParametersSet()
+        => _errorMessage = Error switch
+        {
+            "invalid" => "Please provide both username and password.",
+            "blocked" => "Login request was blocked by the upstream service.",
+            "unreachable" => "Could not reach the authentication service.",
+            "failed" => "Authentication failed. Please check your credentials.",
+            _ => null,
+        };
+
+    private sealed class LoginModel
+    {
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+        public bool RememberMe { get; set; }
+    }
+}

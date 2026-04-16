@@ -1,0 +1,13 @@
+// In Program.cs — add before app.UseRouting()
+string[] blockedAgents = new[] { "GPTBot", "ChatGPT", "facebookexternalhit", "meta-externalagent", "CCBot" };
+
+app.Use(async (context, next) =>
+{
+    string ua = context.Request.Headers.UserAgent.ToString();
+    if (blockedAgents.Any(agent => ua.Contains(agent, StringComparison.OrdinalIgnoreCase)))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
+    await next();
+});

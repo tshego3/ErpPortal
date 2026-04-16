@@ -1,0 +1,50 @@
+@page "/dashboard"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject LayoutService LayoutSvc
+@inject IOptions<BrandingConfig> BrandingOptions
+
+<PageTitle>Dashboard — @BrandingOptions.Value.CompanyName</PageTitle>
+<HeadContent>
+    <meta name="description" content="ERP Dashboard Overview." />
+</HeadContent>
+
+<MudText Typo="Typo.h4" Class="mb-4">Dashboard Overview</MudText>
+
+<MudGrid>
+    <MudItem xs="12" sm="6" lg="4">
+        <MudPaper Elevation="2" Class="pa-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center">
+                <MudIcon Icon="@Icons.Material.Filled.People" Color="Color.Primary" Size="Size.Large" />
+                <MudStack>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Total Users (Server State)</MudText>
+                    <MudText Typo="Typo.h5" Class="font-weight-bold">150</MudText>
+                </MudStack>
+            </MudStack>
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" sm="6" lg="4">
+        <MudPaper Elevation="2" Class="pa-4">
+            <MudStack Row="true" AlignItems="AlignItems.Center">
+                <MudIcon Icon="@Icons.Material.Filled.Menu" Color="Color.Info" Size="Size.Large" />
+                <MudStack>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Sidebar (UI State)</MudText>
+                    <MudChip T="string" Color="@(LayoutSvc.IsSidebarOpen ? Color.Success : Color.Default)" Size="Size.Small">
+                        @(LayoutSvc.IsSidebarOpen ? "Expanded" : "Collapsed")
+                    </MudChip>
+                </MudStack>
+            </MudStack>
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" sm="12" lg="4">
+        <MudPaper Elevation="2" Class="pa-4" Style="border: 1px dashed var(--brand-primary)">
+            <MudText Typo="Typo.subtitle2" Class="mb-2">Pro Insight: Dynamic Theming</MudText>
+            <MudText Typo="Typo.body2">
+                This card's border uses a <strong>CSS Variable</strong> synced via our
+                ThemeProvider for brand-consistent styling across all components.
+            </MudText>
+        </MudPaper>
+    </MudItem>
+</MudGrid>

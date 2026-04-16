@@ -1,0 +1,46 @@
+@using Microsoft.Extensions.Options
+@using MudBlazor.Utilities
+@inject IOptions<BrandingConfig> BrandingOptions
+
+@* Equivalent of EnterpriseThemeProvider.tsx — sets the MudBlazor theme and
+   synchronises CSS variables at the document root for third-party component compatibility. *@
+
+<MudThemeProvider Theme="_theme" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<HeadContent>
+    <style>
+        :root {
+            --brand-primary:   @_branding.PrimaryColor;
+            --brand-secondary: @_branding.SecondaryColor;
+            --brand-accent:    @_branding.AccentColor;
+        }
+    </style>
+</HeadContent>
+
+@code {
+    private BrandingConfig _branding = default!;
+    private MudTheme _theme = default!;
+
+    protected override void OnInitialized()
+    {
+        _branding = BrandingOptions.Value;
+        _theme = new MudTheme
+        {
+            PaletteLight = new PaletteLight
+            {
+                // MudBlazor v9: MudColor lives in MudBlazor.Utilities — @using above is required (CS0246 fix)
+                Primary            = new MudColor(_branding.PrimaryColor),
+                Secondary          = new MudColor(_branding.SecondaryColor),
+                AppbarBackground   = new MudColor(_branding.PrimaryColor),
+                DrawerBackground   = new MudColor(_branding.SecondaryColor),
+                DrawerText         = Colors.Shades.White,
+            },
+            // MudBlazor v9: Typography slot types (Default, H6, etc.) are short class names that collide
+            // with C# identifiers under TreatWarningsAsErrors=true, causing CS0246.
+            // The font is enforced via the CSS universal selector in wwwroot/app.css instead — see §19.
+        };
+    }
+}

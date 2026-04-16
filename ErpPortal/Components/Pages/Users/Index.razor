@@ -1,0 +1,175 @@
+@page "/users"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@attribute [OutputCache(PolicyName = "UsersList")]
+@inject IRepository<User> UserRepo
+@inject INotificationService Notifier
+
+<PageTitle>User Management</PageTitle>
+
+<MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudText Typo="Typo.h4">User Management</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+               OnClick="@(() => _createModalOpen = true)">
+        Add User
+    </MudButton>
+</MudStack>
+
+@if (_isLoading)
+{
+    <MudSkeleton Height="400px" />
+}
+else if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error">@_error</MudAlert>
+}
+else
+{
+    <MudPaper Elevation="2" Class="pa-2">
+        <MudTextField @bind-Value="_globalFilter"
+                      Placeholder="Search users..."
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Class="mb-3" />
+
+        @* MudBlazor v9: MudTable replaces QuickGrid — both libraries export TemplateColumn and
+           Razor cannot disambiguate them (RZ9985). MudTable carries no such ambiguity. *@
+        <MudTable Items="@FilteredUsers" RowsPerPage="20" Hover="true" Striped="true">
+            <HeaderContent>
+                <MudTh>Name</MudTh>
+                <MudTh>Email</MudTh>
+                <MudTh>Username</MudTh>
+                <MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <MudStack Row="true" AlignItems="AlignItems.Center">
+                        @* MudBlazor v9: MUD0002 rejects Image attribute on MudAvatar — use initials *@
+                        <MudAvatar Size="Size.Small" Color="Color.Primary">
+                            @context.FirstName[0]@context.LastName[0]
+                        </MudAvatar>
+                        <MudText Typo="Typo.body2">@context.FirstName @context.LastName</MudText>
+                    </MudStack>
+                </MudTd>
+                <MudTd>@context.Email</MudTd>
+                <MudTd>@context.Username</MudTd>
+                <MudTd>
+                    <MudStack Row="true" Justify="Justify.FlexEnd">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Size="Size.Small" Color="Color.Default" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Size="Size.Small" Color="Color.Error"
+                                       OnClick="@(() => OpenDeleteConfirm(context))" />
+                    </MudStack>
+                </MudTd>
+            </RowTemplate>
+            <PagerContent>
+                <MudTablePager />
+            </PagerContent>
+        </MudTable>
+    </MudPaper>
+}
+
+@* Create User Modal *@
+<MudDialog @bind-Visible="_createModalOpen" Options="_dialogOptions">
+    <TitleContent><MudText Typo="Typo.h6">Add New User</MudText></TitleContent>
+    <DialogContent>
+        <EditForm Model="_newUser" OnValidSubmit="HandleCreateUserAsync" FormName="CreateUserForm">
+            <DataAnnotationsValidator />
+            <MudStack>
+                <MudTextField @bind-Value="_newUser.FirstName" Label="First Name" For="@(() => _newUser.FirstName)" />
+                <MudTextField @bind-Value="_newUser.LastName"  Label="Last Name"  For="@(() => _newUser.LastName)" />
+                <MudTextField @bind-Value="_newUser.Email"     Label="Email"      For="@(() => _newUser.Email)" />
+                <MudTextField @bind-Value="_newUser.Username"  Label="Username"   For="@(() => _newUser.Username)" />
+                <MudButton ButtonType="ButtonType.Submit" Variant="Variant.Filled"
+                           Color="Color.Primary" Disabled="_isSubmitting">
+                    Create User
+                </MudButton>
+            </MudStack>
+        </EditForm>
+    </DialogContent>
+</MudDialog>
+
+@* Delete Confirmation Dialog — equivalent of modals.openConfirmModal() *@
+<MudDialog @bind-Visible="_deleteConfirmOpen" Options="_dialogOptions">
+    <TitleContent><MudText Typo="Typo.h6">Confirm Deletion</MudText></TitleContent>
+    <DialogContent>
+        <MudText>This action cannot be undone.</MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _deleteConfirmOpen = false)">Cancel</MudButton>
+        <MudButton Color="Color.Error" Variant="Variant.Filled"
+                   OnClick="HandleDeleteAsync" Disabled="_isDeleting">
+            Delete User
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private IReadOnlyList<User> _users = [];
+    private bool _isLoading, _isSubmitting, _isDeleting, _createModalOpen, _deleteConfirmOpen;
+    private string? _error;
+    private string _globalFilter = string.Empty;
+    private User? _userToDelete;
+
+    private readonly DialogOptions _dialogOptions = new() { CloseOnEscapeKey = true };
+    private readonly CreateUserModel _newUser = new();
+
+    private IEnumerable<User> FilteredUsers => _users
+        .Where(u => string.IsNullOrEmpty(_globalFilter) ||
+                    u.FirstName.Contains(_globalFilter, StringComparison.OrdinalIgnoreCase) ||
+                    u.Email.Contains(_globalFilter, StringComparison.OrdinalIgnoreCase) ||
+                    u.Username.Contains(_globalFilter, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isLoading = true;
+        try
+        {
+            (IReadOnlyList<User> data, int _) = await UserRepo.GetAllAsync(0, 50);
+            _users = data;
+        }
+        catch (Exception e) { _error = e.Message; }
+        finally { _isLoading = false; }
+    }
+
+    private void OpenDeleteConfirm(User user)
+    {
+        _userToDelete = user;
+        _deleteConfirmOpen = true;
+    }
+
+    private async Task HandleDeleteAsync()
+    {
+        if (_userToDelete is null) return;
+        _isDeleting = true;
+        try
+        {
+            await UserRepo.DeleteAsync(_userToDelete.Id);
+            _users = _users.Where(u => u.Id != _userToDelete.Id).ToList();
+            _deleteConfirmOpen = false;
+        }
+        finally { _isDeleting = false; }
+    }
+
+    private async Task HandleCreateUserAsync()
+    {
+        _isSubmitting = true;
+        try
+        {
+            User user = new User(0, _newUser.Username, _newUser.Email, _newUser.FirstName, _newUser.LastName, string.Empty);
+            User created = await UserRepo.CreateAsync(user);
+            _users = [.. _users, created];
+            _createModalOpen = false;
+        }
+        finally { _isSubmitting = false; }
+    }
+
+    private sealed class CreateUserModel
+    {
+        [Required] public string FirstName { get; set; } = string.Empty;
+        [Required] public string LastName  { get; set; } = string.Empty;
+        [Required, EmailAddress] public string Email    { get; set; } = string.Empty;
+        [Required] public string Username  { get; set; } = string.Empty;
+    }
+}
