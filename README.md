@@ -2201,19 +2201,89 @@ appsettings.Development.json
 
 ### Local Development
 
+#### Step 1: Trust the ASP.NET Core Dev Certificate
+
+Before running any project over HTTPS, ensure your machine trusts the .NET self-signed development certificate. Without this step, browsers will show a "Your connection is not private" warning and `HttpClient` calls between the API gateway and the Blazor portal will fail with SSL errors.
+
+```bash
+# Generate the certificate (idempotent — safe to run multiple times)
+dotnet dev-certs https
+
+# Trust the certificate (required once per machine — OS will prompt for confirmation)
+dotnet dev-certs https --trust
+```
+
+> [!NOTE]
+> **One-Time Setup**
+>
+> You only need to run `dotnet dev-certs https --trust` once per machine. The trusted certificate persists across projects and .NET SDK upgrades. If you reinstall the SDK or rotate the certificate, re-run the command.
+
+#### Step 2: Start the Dev Server with `dotnet watch`
+
+`dotnet watch` (shorthand for `dotnet watch run`) starts the application and watches for file changes. When you edit a `.razor` or `.cs` file, it hot-reloads the change — comparable to Vite's HMR. For Blazor pages, changes to markup and `@code` blocks are applied without a full restart.
+
 ```bash
 # Restore dependencies
 dotnet restore
 
-# Start the dev server with Hot Reload
+# Start the dev server with Hot Reload (reads URL from launchSettings.json)
 dotnet watch run
 # → Listening on https://localhost:5001 (or http://localhost:5000)
+```
+
+If the app defaults to HTTP, force the HTTPS profile defined in `launchSettings.json`:
+
+```bash
+dotnet watch run --launch-profile https
+```
+
+To override everything and bind to a specific HTTPS port directly:
+
+```bash
+dotnet watch run --urls "https://localhost:7001"
 ```
 
 > [!TIP]
 > **`dotnet watch` = `npm run dev`**
 >
 > `dotnet watch run` starts the application and watches for file changes. When you edit a `.razor` or `.cs` file, it hot-reloads the change — comparable to Vite's HMR. For Blazor pages, changes to markup and `@code` blocks are applied without a full restart.
+
+#### Step 3: Verify Project Configuration
+
+For HTTPS to work correctly during the `watch` process, your `launchSettings.json` and `Program.cs` should be configured correctly.
+
+**`Properties/launchSettings.json`** — Ensure an `https` profile exists with a valid SSL port (7000+ range by convention):
+
+```json
+"profiles": {
+  "https": {
+    "commandName": "Project",
+    "dotnetRunMessages": true,
+    "launchBrowser": true,
+    "applicationUrl": "https://localhost:7001;http://localhost:5001",
+    "environmentVariables": {
+      "ASPNETCORE_ENVIRONMENT": "Development"
+    }
+  }
+}
+```
+
+**`Program.cs`** — Ensure the HTTPS redirection middleware is active:
+
+```csharp
+app.UseHttpsRedirection(); // Forces HTTP requests to HTTPS
+```
+
+This is already present in the ErpPortal `Program.cs` (see Section 9, line `app.UseHttpsRedirection()`).
+
+#### Quick Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Browser shows "Your connection is not private" | Dev certificate not trusted | Run `dotnet dev-certs https --trust` |
+| Browser sticks to old port after config change | Browser cache | Try an Incognito/Private window |
+| `dotnet watch` inside Docker fails HTTPS | Host cert not mounted | Export the certificate and mount it as a volume into the container |
+| HSTS prevents page load in dev | `app.UseHsts()` active in Development | Only enable HSTS in Production (the ErpPortal template already gates this correctly) |
 
 ### Running Both Projects Simultaneously (HTTPS Debug)
 
