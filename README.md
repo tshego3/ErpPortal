@@ -1,5 +1,5 @@
 # Enterprise ERP Development with Blazor SSR & Clean Architecture
-<!-- Optimized for .NET 9, Blazor Static SSR, Enhanced Navigation, MudBlazor, and QuickGrid -->
+<!-- Optimized for .NET 10, Blazor Static SSR, Enhanced Navigation, MudBlazor, and QuickGrid -->
 
 ## Table of Contents
 
@@ -7,6 +7,8 @@
 2. [Prerequisites](#prerequisites)
 3. [Architecture Overview](#architecture-overview)
 4. [Project Setup](#project-setup)
+   - 4.1 [Multi-Project Orchestration (VS Code)](#multi-project-orchestration)
+   - 4.2 [User Secrets — How They Work (Dev → Prod)](#user-secrets)
 5. [The .NET Core (Built-in DI & Services)](#core-architecture)
 6. [Domain & Abstraction Layer](#domain-layer)
 7. [Infrastructure & Security](#infrastructure-layer)
@@ -29,7 +31,7 @@
 
 ## 1. Introduction & Philosophy <a name="introduction"></a>
 
-This guide builds a **lightweight, high-performance ERP Dashboard** using **Blazor Static Server-Side Rendering (SSR)** in .NET 9. The stack is: Blazor SSR with **Enhanced Navigation**, **MudBlazor** for UI components, **QuickGrid** for data grids, the built-in **`<Virtualize>`** component for large lists, **`EditForm`** for type-safe form management, and **[DummyJSON](https://dummyjson.com)** as the API backend.
+This guide builds a **lightweight, high-performance ERP Dashboard** using **Blazor Static Server-Side Rendering (SSR)** in .NET 10. The stack is: Blazor SSR with **Enhanced Navigation**, **MudBlazor** for UI components, **QuickGrid** for data grids, the built-in **`<Virtualize>`** component for large lists, **`EditForm`** for type-safe form management, and **[DummyJSON](https://dummyjson.com)** as the API backend.
 
 This is a genuine .NET-native implementation — not a JavaScript project in disguise. Every tool is a first-class citizen of the ASP.NET Core ecosystem.
 
@@ -50,7 +52,7 @@ This is a genuine .NET-native implementation — not a JavaScript project in dis
 
 ## 2. Prerequisites <a name="prerequisites"></a>
 
-- **.NET 9 SDK** (download from [dot.net](https://dot.net))
+- **.NET 10 SDK** (download from [dot.net](https://dot.net))
 - **Podman** (or Docker Desktop)
 - **Visual Studio 2022 17.8+** or **VS Code** with the C# Dev Kit extension
 - **Git**
@@ -59,7 +61,7 @@ Verify your environment:
 
 ```bash
 dotnet --version
-# 9.0.x
+# 10.0.x
 
 podman -v
 # podman version 5.x.x
@@ -145,7 +147,7 @@ dotnet add package Microsoft.Extensions.Http
 dotnet add package FluentValidation.DependencyInjectionExtensions
 
 # Output caching middleware
-# (included in Microsoft.AspNetCore.OutputCaching — no extra package needed for .NET 9)
+# (included in Microsoft.AspNetCore.OutputCaching — no extra package needed for .NET 10)
 
 # Unit testing (see Appendix)
 dotnet add package xunit --project ErpPortal.Tests
@@ -161,7 +163,7 @@ Replace the default contents with a strict, production-grade configuration:
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- Fail the build on any warning — the "No any" equivalent for C# -->
@@ -172,7 +174,7 @@ Replace the default contents with a strict, production-grade configuration:
 
   <ItemGroup>
     <PackageReference Include="MudBlazor" Version="7.*" />
-    <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid" Version="9.*" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.*" />
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.*" />
   </ItemGroup>
 
@@ -237,7 +239,7 @@ dotnet user-secrets set "ApiSettings:BaseUrl" "https://your-api.example.com"
 
 ---
 
-### 4.1 Multi-Project Orchestration (VS Code)
+### 4.1 Multi-Project Orchestration (VS Code) <a name="multi-project-orchestration"></a>
 
 To strictly enforce that the API Gateway is running before the Blazor App starts, use a shared `.vscode` setup with a sequenced task pipeline.
 
@@ -293,6 +295,189 @@ To strictly enforce that the API Gateway is running before the Blazor App starts
     }
   ]
 }
+```
+
+---
+
+### 4.2 User Secrets — How They Work (Dev → Prod) <a name="user-secrets"></a>
+
+#### What Are User Secrets?
+
+`dotnet user-secrets` is the ASP.NET Core mechanism for keeping sensitive configuration values **off disk and out of source control** during local development. Secrets are stored in a JSON file in your OS user profile directory — completely outside the project folder — and are never committed to Git.
+
+| Environment | Where secrets live | How ASP.NET Core reads them |
+|---|---|---|
+| **Development** | `%APPDATA%\Microsoft\UserSecrets\<guid>\secrets.json` (Windows) or `~/.microsoft/usersecrets/<guid>/secrets.json` (Linux/macOS) | Automatically loaded when `ASPNETCORE_ENVIRONMENT=Development` |
+| **CI / Staging** | GitHub Secrets / Azure DevOps variable groups | Injected as environment variables at pipeline runtime |
+| **Production** | Azure Key Vault (recommended) or environment variables | Loaded via `AddAzureKeyVault()` or read from process environment |
+
+The `<guid>` is the `UserSecretsId` declared in the `.csproj`:
+
+```xml
+<PropertyGroup>
+  <UserSecretsId>your-project-guid-here</UserSecretsId>
+</PropertyGroup>
+```
+
+ASP.NET Core's configuration builder layers sources in priority order (last one wins):
+
+```
+appsettings.json
+  ↓ overridden by
+appsettings.Development.json
+  ↓ overridden by
+User Secrets  (Development only)
+  ↓ overridden by
+Environment Variables  (all environments)
+  ↓ overridden by
+Command-line arguments
+```
+
+This means the same key — e.g. `ApiSettings:BaseUrl` — can exist in `appsettings.json` as a safe default and be silently overridden by a secret without touching any file tracked by Git.
+
+#### Setting Up User Secrets (Blazor WebUI)
+
+```powershell
+# 1. Initialise — adds <UserSecretsId> to the .csproj if not already present
+dotnet user-secrets init --project ErpPortal/ErpPortal.csproj
+
+# 2. Set a secret value
+dotnet user-secrets set "ApiSettings:BaseUrl" "https://your-api.example.com" --project ErpPortal/ErpPortal.csproj
+
+# 3. List all stored secrets for this project
+dotnet user-secrets list --project ErpPortal/ErpPortal.csproj
+
+# 4. Remove a specific secret
+dotnet user-secrets remove "ApiSettings:BaseUrl" --project ErpPortal/ErpPortal.csproj
+
+# 5. Clear all secrets for this project
+dotnet user-secrets clear --project ErpPortal/ErpPortal.csproj
+```
+
+#### Setting Up User Secrets (API Gateway)
+
+```powershell
+# The JWT signing secret must never appear in appsettings.json
+# Generate a cryptographically random 256-bit (32-byte) secret
+
+$rng   = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$bytes = New-Object byte[] 32
+$rng.GetBytes($bytes)
+$secret = [System.Convert]::ToBase64String($bytes)
+
+dotnet user-secrets set "Jwt:Secret" $secret --project ErpPortal.Api/ErpPortal.Api.csproj
+```
+
+`secrets.json` on disk looks identical to `appsettings.json` — nested keys use JSON objects, not `__` separators:
+
+```json
+{
+  "Jwt": {
+    "Secret": "your-base64-encoded-256bit-secret"
+  },
+  "ApiSettings": {
+    "BaseUrl": "https://your-api.example.com"
+  }
+}
+```
+
+> [!NOTE]
+> **No Code Changes Required**
+>
+> `IConfiguration` reads user secrets transparently. `builder.Configuration["Jwt:Secret"]` and `IOptions<ApiSettings>` work identically whether the value comes from `appsettings.json`, user secrets, or an environment variable. The application code has zero awareness of the storage location.
+
+#### How User Secrets Are Enabled in `Program.cs`
+
+The Web Application builder enables user secrets automatically in Development — no explicit call needed:
+
+```csharp
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+// User secrets are loaded automatically when:
+// - builder.Environment.IsDevelopment() is true
+// - The .csproj has a <UserSecretsId> element
+// No additional setup required.
+```
+
+If you need secrets in non-Development environments (e.g., a local Staging run):
+
+```csharp
+builder.Configuration.AddUserSecrets<Program>(optional: true);
+```
+
+#### Production: Environment Variables
+
+In production ASP.NET Core reads the same keys from **environment variables**. The only difference is that nested JSON paths use `__` (double underscore) as the separator:
+
+```
+appsettings.json key     →  Environment variable
+─────────────────────────────────────────────────
+Jwt:Secret               →  Jwt__Secret
+ApiSettings:BaseUrl      →  ApiSettings__BaseUrl
+DummyJson:Username       →  DummyJson__Username
+```
+
+Set them in your hosting platform:
+
+```powershell
+# Azure App Service — via Azure CLI
+az webapp config appsettings set \
+  --name my-erp-portal \
+  --resource-group my-rg \
+  --settings Jwt__Secret="..." ApiSettings__BaseUrl="https://api.prod.example.com"
+
+# Docker / Podman — passed at container run time
+podman run -d \
+  -e Jwt__Secret="..." \
+  -e ApiSettings__BaseUrl="https://api.prod.example.com" \
+  enterprise-erp-portal
+```
+
+#### Production: Azure Key Vault (Recommended)
+
+For enterprise workloads, store secrets in Azure Key Vault and load them at startup. Key Vault secret names use `--` (double dash) in place of `:` because Key Vault names cannot contain colons:
+
+```powershell
+# Create the secret in Key Vault
+az keyvault secret set --vault-name my-kv --name "Jwt--Secret" --value "your-secret"
+```
+
+```csharp
+// Program.cs — load Key Vault secrets before DI registration
+if (!builder.Environment.IsDevelopment())
+{
+    string kvUri = builder.Configuration["KeyVault:Uri"]
+        ?? throw new InvalidOperationException("KeyVault:Uri is required in production.");
+
+    builder.Configuration.AddAzureKeyVault(
+        new Uri(kvUri),
+        new DefaultAzureCredential());   // Uses Managed Identity in Azure — no credentials in code
+}
+```
+
+Add the NuGet package:
+
+```bash
+dotnet add package Azure.Extensions.AspNetCore.Configuration.Secrets
+dotnet add package Azure.Identity
+```
+
+> [!TIP]
+> **Managed Identity — Zero Credential Rotation**
+>
+> When running on Azure App Service or Azure Container Apps, `DefaultAzureCredential()` authenticates to Key Vault using the service's **Managed Identity** — no client secret or certificate required in the application. Key Vault access policies (or RBAC) control which identities can read which secrets. This is the production-grade zero-secret-in-code pattern.
+
+#### Summary: Secret Storage Decision Tree
+
+```
+Is this a secret value?
+│
+├── No  → appsettings.json (safe to commit)
+│
+└── Yes
+    ├── Local development  → dotnet user-secrets
+    ├── CI pipeline        → GitHub Secrets / Azure DevOps variable group
+    ├── Container hosting  → Environment variable at container run time
+    └── Azure hosting      → Azure Key Vault + Managed Identity (preferred)
 ```
 
 ---
@@ -484,47 +669,63 @@ Authentication in Blazor SSR uses **cookie-based sessions** managed by ASP.NET C
 
 ### `Infrastructure/Http/AuthTokenHandler.cs`
 
-A `DelegatingHandler` that automatically injects the Bearer token into outgoing requests — the .NET equivalent of the Axios request interceptor.
+A `DelegatingHandler` that automatically injects the portal JWT into every outgoing request to the API gateway, and **intercepts `401 Unauthorized` responses**. When the API rejects a request because the token has expired, the handler signs the user out of the cookie session and redirects to `/login?error=session_expired` — equivalent to an Axios response interceptor that handles expired tokens.
 
 ```csharp
+using System.Net;
 using System.Net.Http.Headers;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 
 namespace ErpPortal.Infrastructure.Http;
 
 /// <summary>
-/// Equivalent of the Axios request interceptor that injects "Authorization: Bearer ..."
-/// Registered as a transient DelegatingHandler in Program.cs.
-/// </summary>
-/// <summary>
-/// Historically injected "Authorization: Bearer ..." into outgoing requests.
-/// Since the API Gateway (ErpPortal.Api) now manages the DummyJSON JWT lifecycle,
-/// this handler is preserved as a no-op pass-through to maintain architecture
-/// consistency, or can be used for Blazor-to-API-Gateway authentication.
+/// Injects the Bearer token from the authenticated user's claims into outgoing HTTP requests.
+/// Equivalent of an Axios request interceptor.
+/// If the API returns 401 (token expired), signs the user out and redirects to /login.
 /// </summary>
 public sealed class AuthTokenHandler : DelegatingHandler
 {
-    /*
     private readonly IHttpContextAccessor _httpContextAccessor;
 
     public AuthTokenHandler(IHttpContextAccessor httpContextAccessor)
         => _httpContextAccessor = httpContextAccessor;
-    */
 
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
-        /*
         string? token = _httpContextAccessor.HttpContext?.User.FindFirst("Token")?.Value;
         if (!string.IsNullOrEmpty(token))
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
-        */
-        return await base.SendAsync(request, cancellationToken);
+
+        HttpResponseMessage response = await base.SendAsync(request, cancellationToken);
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            HttpContext? ctx = _httpContextAccessor.HttpContext;
+            if (ctx is not null)
+            {
+                await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+                ctx.Response.Redirect("/login?error=session_expired");
+            }
+        }
+
+        return response;
     }
 }
 ```
+
+> [!NOTE]
+> **Expired Token Flow**
+>
+> 1. Portal JWT expires → WebAPI rejects the request with `401 Unauthorized`
+> 2. `AuthTokenHandler` catches the `401`, calls `SignOutAsync` to clear the cookie, and redirects to `/login?error=session_expired`
+> 3. The login page maps `session_expired` to *"Your session has expired. Please sign in again."*
+>
+> This prevents users from seeing an unhandled error state — they are returned cleanly to the login page.
 
 ### `Infrastructure/Http/ErrorHandlingHandler.cs`
 
@@ -1384,16 +1585,17 @@ Enhanced Navigation is configured here. It intercepts link clicks on `<a>` tags,
 ```razor
 @page "/login"
 @attribute [ExcludeFromInteractiveRouting]
-@using Microsoft.AspNetCore.Antiforgery
+@* @using Microsoft.AspNetCore.Antiforgery *@
 @using Microsoft.Extensions.Options
-@inject IAntiforgery Antiforgery
+@* @inject IAntiforgery Antiforgery *@
 @inject IOptions<BrandingConfig> BrandingOptions
 @layout ErpPortal.Components.Layout.MainLayout
 
 <PageTitle>Sign In — @BrandingOptions.Value.CompanyName</PageTitle>
 
 <form method="post" action="/account/login">
-    <input type="hidden" name="__RequestVerificationToken" value="@AntiforgeryToken" />
+    @* <input type="hidden" name="__RequestVerificationToken" value="@AntiforgeryToken" /> *@
+    <AntiforgeryToken />
 
     @* Mud inputs still submit standard form field names for controller model binding *@
     <MudTextField @bind-Value="Model.Username"
@@ -1422,18 +1624,18 @@ Enhanced Navigation is configured here. It intercepts link clicks on `<a>` tags,
 </form>
 
 @code {
-    [CascadingParameter]
-    private HttpContext? HttpContext { get; set; }
-
+    // [CascadingParameter]
+    // private HttpContext? HttpContext { get; set; }
+    d
     [SupplyParameterFromQuery(Name = "error")]
     private string? Error { get; set; }
 
     private LoginModel Model { get; set; } = new();
     private string? _errorMessage;
-    private string? AntiforgeryToken =>
-        HttpContext is null
-            ? null
-            : Antiforgery.GetAndStoreTokens(HttpContext).RequestToken;
+    // private string? AntiforgeryToken =>
+    //     HttpContext is null
+    //        ? null
+    //        : Antiforgery.GetAndStoreTokens(HttpContext).RequestToken;
 
     protected override void OnParametersSet()
         => _errorMessage = Error switch
@@ -1950,7 +2152,7 @@ Because this is an ASP.NET Core application, the runtime is the container itself
 
 ```dockerfile
 # Stage 1: Build
-FROM mcr.microsoft.com/dotnet/sdk:9.0 AS builder
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS builder
 WORKDIR /app
 
 # Restore packages first (layer-cached until .csproj changes)
@@ -1961,7 +2163,7 @@ COPY . .
 RUN dotnet publish -c Release -o ./publish --no-restore
 
 # Stage 2: Runtime (much smaller than SDK image)
-FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runner
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runner
 WORKDIR /app
 
 # Non-root user for security
@@ -2013,7 +2215,143 @@ dotnet watch run
 >
 > `dotnet watch run` starts the application and watches for file changes. When you edit a `.razor` or `.cs` file, it hot-reloads the change — comparable to Vite's HMR. For Blazor pages, changes to markup and `@code` blocks are applied without a full restart.
 
-### Building for Production
+### Running Both Projects Simultaneously (HTTPS Debug)
+
+Both `ErpPortal.Api` (port 7002) and `ErpPortal` (port 7001) must run at the same time for the full application to work. The API must start before the Blazor app makes its first request.
+
+#### Option A: VS Code — Single F5 Launch (Recommended)
+
+The compound launch configuration in `.vscode/launch.json` (section 4.1) starts both projects with HTTPS in one keystroke. Update the `env` block to use `https`:
+
+```json
+// .vscode/launch.json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "API Gateway (HTTPS)",
+      "type": "dotnet",
+      "request": "launch",
+      "projectPath": "${workspaceFolder}/ErpPortal.Api/ErpPortal.Api.csproj",
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "https://localhost:7002;http://localhost:5002"
+      }
+    },
+    {
+      "name": "Blazor Portal (HTTPS)",
+      "type": "dotnet",
+      "request": "launch",
+      "projectPath": "${workspaceFolder}/ErpPortal/ErpPortal.csproj",
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "https://localhost:7001;http://localhost:5001"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "▶ Full ERP Solution (HTTPS)",
+      "configurations": ["API Gateway (HTTPS)", "Blazor Portal (HTTPS)"],
+      "stopAll": true
+    }
+  ]
+}
+```
+
+Press **F5** and select **▶ Full ERP Solution (HTTPS)** — VS Code launches both processes, attaches a debugger to each, and lets you set breakpoints in either project simultaneously.
+
+> [!NOTE]
+> The `ErpPortal` `appsettings.Development.json` should point to the API's HTTPS port:
+> ```json
+> { "ApiSettings": { "BaseUrl": "https://localhost:7002/api" } }
+> ```
+
+#### Option B: Two PowerShell Terminals (no launch file needed)
+
+Open two separate terminals and run one command in each. The `--urls` flag overrides any `launchSettings.json` — no profile required:
+
+```powershell
+# Terminal 1 — API Gateway
+cd ErpPortal.Api
+dotnet watch run --urls "https://localhost:7002;http://localhost:5002"
+# → Now listening on: https://localhost:7002
+```
+
+```powershell
+# Terminal 2 — Blazor Portal (start after Terminal 1 is ready)
+cd ErpPortal
+dotnet watch run --urls "https://localhost:7001;http://localhost:5001"
+# → Now listening on: https://localhost:7001
+```
+
+> [!TIP]
+> `dotnet watch run` gives you Hot Reload on both projects. API changes restart the gateway; Blazor markup changes update without a restart.
+
+#### Option C: Single PowerShell Script (no launch file needed)
+
+Save as `run-dev.ps1` in the solution root and run it from one terminal. URLs are passed directly — no `launchSettings.json` profile required:
+
+```powershell
+#!/usr/bin/env pwsh
+# run-dev.ps1 — Starts API Gateway and Blazor Portal in parallel (HTTPS)
+# No launchSettings.json profile needed — URLs are supplied inline.
+
+$ErrorActionPreference = "Stop"
+$root = $PSScriptRoot
+
+$apiJob = Start-Job -ScriptBlock {
+    Set-Location "$using:root/ErpPortal.Api"
+    dotnet watch run --urls "https://localhost:7002;http://localhost:5002"
+} -Name "API"
+
+$appJob = Start-Job -ScriptBlock {
+    # Give the API 3 seconds to bind its port before the app starts
+    Start-Sleep -Seconds 3
+    Set-Location "$using:root/ErpPortal"
+    dotnet watch run --urls "https://localhost:7001;http://localhost:5001"
+} -Name "App"
+
+Write-Host "API Gateway   → https://localhost:7002" -ForegroundColor Cyan
+Write-Host "Blazor Portal → https://localhost:7001" -ForegroundColor Cyan
+Write-Host "Press Ctrl+C to stop both..." -ForegroundColor Yellow
+
+try {
+    while ($true) {
+        Receive-Job -Job $apiJob, $appJob
+        Start-Sleep -Milliseconds 200
+    }
+}
+finally {
+    Stop-Job  -Job $apiJob, $appJob
+    Remove-Job -Job $apiJob, $appJob -Force
+    Write-Host "Both processes stopped." -ForegroundColor Green
+}
+```
+
+Run it:
+
+```powershell
+.\run-dev.ps1
+```
+
+> [!NOTE]
+> **No `launchSettings.json` required**
+>
+> Options B and C pass `--urls` directly to the `dotnet` CLI. This overrides any value in `launchSettings.json` and works even if the file does not exist. The `ASPNETCORE_ENVIRONMENT` environment variable defaults to `Production` when not set; set it explicitly in the terminal if needed:
+> ```powershell
+> $env:ASPNETCORE_ENVIRONMENT = "Development"
+> dotnet watch run --urls "https://localhost:7002;http://localhost:5002"
+> ```
+
+> [!CAUTION]
+> **Dev Certificate**
+>
+> HTTPS on localhost requires the ASP.NET Core dev certificate to be trusted. Run this once on a new machine:
+> ```powershell
+> dotnet dev-certs https --trust
+> ```
+> You will be prompted to confirm the certificate trust in your OS. Without this, browsers will show a security warning and `HttpClient` calls between the two projects will fail with SSL errors.
 
 ```bash
 dotnet publish -c Release -o ./publish
@@ -2193,10 +2531,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup .NET 9
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
       # Equivalent of npm ci — restores packages with lock file
       - name: Restore Dependencies
@@ -2501,9 +2839,13 @@ dotnet watch run
 | Component not re-rendering on service change | Missing `StateHasChanged()` call | Subscribe to `ServiceName.OnChange += StateHasChanged` and unsubscribe in `Dispose()` |
 | `RemoteNavigationManager has not been initialized` | Blazor-scoped service (e.g. `ISnackbar`) injected into an HTTP `DelegatingHandler` that is constructed before a circuit exists | Remove Blazor-scoped dependencies from `DelegatingHandler`; call `INotificationService` from the page's `catch` block instead |
 | Login reports wrong-password for valid credentials | API returns `accessToken` but `User.Token` property has no `[JsonPropertyName]` | Add `[property: JsonPropertyName("accessToken")]` to the `Token` parameter in the `User` record |
-| `A valid antiforgery token was not provided` on `/account/login` | Login rendered as interactive route, so SSR form token lifecycle breaks | Mark login with `[ExcludeFromInteractiveRouting]`, post to controller action, and use hidden `__RequestVerificationToken` |
 | The POST request does not specify which form is being submitted | Static SSR form post with unnamed `<EditForm>` | Add a unique `FormName` to each `<EditForm>` (or `@formname` on raw `<form>`) |
 | Form validation not triggering | Missing `<DataAnnotationsValidator />` | Add `<DataAnnotationsValidator />` inside `<EditForm>` |
+| Page shows error state after token expiry instead of redirecting to login | `AuthTokenHandler` did not handle `401` responses from the API | Handler now calls `SignOutAsync` and `Redirect("/login?error=session_expired")` on `401`; login page maps the error to a friendly message |
+
+<!-- RESOLVED — antiforgery row removed from table (Markdown tables don't support inline comments).
+| `A valid antiforgery token was not provided` on `/account/login` | `IAntiforgery.GetAndStoreTokens()` called during render — response headers already written, so the antiforgery cookie is never sent | Use the built-in `<AntiforgeryToken />` component instead of manually injecting `IAntiforgery`; it integrates with the SSR pipeline and emits the cookie at the correct point |
+-->
 
 ### Debugging the DI Container
 
@@ -2675,6 +3017,10 @@ ErpPortal.Api/
 
 ```json
 {
+  "Jwt": {
+    "Issuer": "ErpPortal.Api",
+    "Audience": "ErpPortal"
+  },
   "DummyJson": {
     "BaseUrl": "https://dummyjson.com",
     "Username": "emilys",
@@ -2688,6 +3034,17 @@ ErpPortal.Api/
     }
   }
 }
+```
+
+The JWT signing secret (`Jwt:Secret`) is **never stored in `appsettings.json`**. Set it via user secrets locally and via environment variable in production:
+
+```bash
+# Local development — generates and stores a 256-bit random secret
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$bytes = New-Object byte[] 32
+$rng.GetBytes($bytes)
+$secret = [System.Convert]::ToBase64String($bytes)
+dotnet user-secrets set "Jwt:Secret" $secret --project ErpPortal.Api/ErpPortal.Api.csproj
 ```
 
 > [!CAUTION]
@@ -3166,9 +3523,20 @@ public sealed class DummyJsonClient : IDummyJsonClient
 
 #### `Controllers/AuthController.cs`
 
+The `AuthController` proxies login credentials to DummyJSON to validate the user, then **issues its own signed JWT** in the response. Downstream clients never receive or store the DummyJSON token — they only work with the portal-issued JWT.
+
 ```csharp
+using ErpPortal.Api.Core.Config;
 using ErpPortal.Api.Core.Contracts;
+using ErpPortal.Api.Core.Domain;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
+using System.ComponentModel.DataAnnotations;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net.Http.Json;
+using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
 
 namespace ErpPortal.Api.Controllers;
 
@@ -3182,13 +3550,19 @@ public sealed class AuthController : ControllerBase
 {
     private readonly ITokenService _tokenService;
     private readonly ILogger<AuthController> _logger;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly JwtSettings _jwtSettings;
 
     public AuthController(
         ITokenService tokenService,
-        ILogger<AuthController> logger)
+        IHttpClientFactory httpClientFactory,
+        ILogger<AuthController> logger,
+        JwtSettings jwtSettings)
     {
         _tokenService = tokenService;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _jwtSettings = jwtSettings;
     }
 
     /// <summary>
@@ -3196,13 +3570,33 @@ public sealed class AuthController : ControllerBase
     /// Returns 200 with the token (for debugging/testing) or 500 on failure.
     /// </summary>
     [HttpPost("login")]
-    public async Task<IActionResult> Login(CancellationToken ct)
+    public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
     {
+        if (!ModelState.IsValid)
+            return ValidationProblem(ModelState);
+
         try
         {
-            string token = await _tokenService.GetAccessTokenAsync(ct);
-            _logger.LogInformation("Token acquired via API login endpoint");
-            return Ok(new { message = "Authenticated", tokenPreview = token[..20] + "..." });
+            using HttpClient http = _httpClientFactory.CreateClient("DummyJsonRaw");
+
+            HttpResponseMessage response = await http.PostAsJsonAsync(
+                "/auth/login",
+                new { username = request.Username, password = request.Password,
+                      expiresInMins = request.ExpiresInMins },
+                JsonSerializerOptions.Default,
+                ct);
+
+            response.EnsureSuccessStatusCode();
+
+            User user = await response.Content
+                .ReadFromJsonAsync<User>(JsonSerializerOptions.Default, ct)
+                ?? throw new InvalidOperationException("Null response from /auth/login");
+
+            // Replace the DummyJSON token with a portal-signed JWT
+            string portalToken = IssuePortalToken(user, request.ExpiresInMins);
+
+            _logger.LogInformation("User login proxied via gateway for {Username}", request.Username);
+            return Ok(user with { Token = portalToken });
         }
         catch (Exception ex)
         {
@@ -3220,7 +3614,51 @@ public sealed class AuthController : ControllerBase
         await _tokenService.InvalidateAsync();
         return Ok(new { message = "Token cache cleared" });
     }
+
+    private string IssuePortalToken(User user, int expiresInMins)
+    {
+        byte[] key = Encoding.UTF8.GetBytes(_jwtSettings.Secret);
+        List<Claim> claims =
+        [
+            new(JwtRegisteredClaimNames.Sub, user.Username),
+            new(JwtRegisteredClaimNames.Email, user.Email),
+            new(JwtRegisteredClaimNames.GivenName, user.FirstName),
+            new(JwtRegisteredClaimNames.FamilyName, user.LastName),
+            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
+        ];
+
+        var tokenDescriptor = new SecurityTokenDescriptor
+        {
+            Subject = new ClaimsIdentity(claims),
+            Expires = DateTime.UtcNow.AddMinutes(expiresInMins),
+            Issuer = _jwtSettings.Issuer,
+            Audience = _jwtSettings.Audience,
+            SigningCredentials = new SigningCredentials(
+                new SymmetricSecurityKey(key),
+                SecurityAlgorithms.HmacSha256),
+        };
+
+        var handler = new JwtSecurityTokenHandler();
+        SecurityToken token = handler.CreateToken(tokenDescriptor);
+        return handler.WriteToken(token);
+    }
+
+    public sealed class LoginRequest
+    {
+        [Required] public string Username { get; set; } = string.Empty;
+        [Required] public string Password { get; set; } = string.Empty;
+        [Range(1, 43200)] public int ExpiresInMins { get; set; } = 60;
+    }
 }
+```
+
+The corresponding `JwtSettings` class carries the issuer, audience, and secret via DI:
+
+```csharp
+// Core/Config/JwtSettings.cs
+namespace ErpPortal.Api.Core.Config;
+
+public sealed record JwtSettings(string Secret, string Issuer, string Audience);
 ```
 
 #### `Controllers/ProductsController.cs`
@@ -3228,6 +3666,7 @@ public sealed class AuthController : ControllerBase
 ```csharp
 using ErpPortal.Api.Core.Contracts;
 using ErpPortal.Api.Core.Domain;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ErpPortal.Api.Controllers;
@@ -3236,6 +3675,7 @@ namespace ErpPortal.Api.Controllers;
 /// Proxies requests to DummyJSON's /auth/products (protected endpoint).
 /// The DummyJSON JWT is managed transparently by TokenService + DummyJsonAuthHandler.
 /// </summary>
+[Authorize]
 [ApiController]
 [Route("api/[controller]")]
 public sealed class ProductsController : ControllerBase
@@ -3269,6 +3709,7 @@ public sealed class ProductsController : ControllerBase
 ```csharp
 using ErpPortal.Api.Core.Contracts;
 using ErpPortal.Api.Core.Domain;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ErpPortal.Api.Controllers;
@@ -3276,6 +3717,7 @@ namespace ErpPortal.Api.Controllers;
 /// <summary>
 /// Proxies requests to DummyJSON's /auth/todos (protected endpoint).
 /// </summary>
+[Authorize]
 [ApiController]
 [Route("api/[controller]")]
 public sealed class TodosController : ControllerBase
@@ -3312,9 +3754,42 @@ using ErpPortal.Api.Core.Config;
 using ErpPortal.Api.Core.Contracts;
 using ErpPortal.Api.Infrastructure.Http;
 using ErpPortal.Api.Infrastructure.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+
+// ─── JWT Authentication ───────────────────────────────────────────────────────
+// Jwt:Secret must come from user secrets (dev) or environment variable (prod).
+string jwtSecret = builder.Configuration["Jwt:Secret"]
+    ?? throw new InvalidOperationException(
+        "Jwt:Secret is not configured. Set it via User Secrets or environment variable.");
+string jwtIssuer   = builder.Configuration["Jwt:Issuer"]   ?? "ErpPortal.Api";
+string jwtAudience = builder.Configuration["Jwt:Audience"] ?? "ErpPortal";
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            ValidateIssuer   = true,
+            ValidIssuer      = jwtIssuer,
+            ValidateAudience = true,
+            ValidAudience    = jwtAudience,
+            ValidateLifetime = true,
+            ClockSkew        = TimeSpan.Zero,
+        };
+    });
+
+builder.Services.AddAuthorization();
+
+// ─── JWT Settings (injected into AuthController via DI) ──────────────────────
+builder.Services.AddSingleton(new JwtSettings(jwtSecret, jwtIssuer, jwtAudience));
 
 // ─── Configuration Validation ─────────────────────────────────────────────────
 builder.Services
@@ -3361,6 +3836,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseAuthentication();   // must come before UseAuthorization
+app.UseAuthorization();
 app.MapControllers();
 app.Run();
 ```
@@ -3376,19 +3853,27 @@ app.Run();
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>ErpPortal.Api</RootNamespace>
+    <UserSecretsId>erp-portal-api-jwt</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.*" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.*" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.*" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="10.*" />
   </ItemGroup>
 
 </Project>
 ```
+
+> [!NOTE]
+> **`UserSecretsId`**
+>
+> The `UserSecretsId` element enables `dotnet user-secrets` for this project so that `Jwt:Secret` can be stored outside the source tree during local development. In production, supply `Jwt__Secret` as an environment variable or via Azure Key Vault.
 
 ### 20.13 Running & Testing the API
 
@@ -3405,20 +3890,34 @@ dotnet run
 #### Quick Smoke Test with `curl`
 
 ```bash
-# 1. Trigger login (acquires and caches the DummyJSON JWT)
-curl -X POST https://localhost:5002/api/auth/login
-# → { "message": "Authenticated", "tokenPreview": "eyJhbGciOiJIUzI1Ni..." }
+# 1. Login — WebAPI validates against DummyJSON, returns a portal-signed JWT
+curl -s -X POST https://localhost:5002/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"emilys","password":"emilyspass","expiresInMins":60}'
+# → { "id": 1, "username": "emilys", ..., "accessToken": "eyJhbGciOiJIUzI1NiIs..." }
 
-# 2. Fetch protected products (JWT is injected automatically by the handler)
-curl https://localhost:5002/api/products?limit=3
+# Save the token for subsequent requests
+TOKEN=$(curl -s -X POST https://localhost:5002/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"emilys","password":"emilyspass"}' | jq -r .accessToken)
+
+# 2. Fetch protected products — Bearer token is required (returns 401 without it)
+curl https://localhost:5002/api/products?limit=3 \
+  -H "Authorization: Bearer $TOKEN"
 # → { "products": [...], "total": 194, "skip": 0, "limit": 3 }
 
 # 3. Fetch protected todos
-curl https://localhost:5002/api/todos?limit=5
+curl https://localhost:5002/api/todos?limit=5 \
+  -H "Authorization: Bearer $TOKEN"
 # → { "todos": [...], "total": 254, "skip": 0, "limit": 5 }
 
-# 4. Force token invalidation (next request will re-authenticate)
-curl -X POST https://localhost:5002/api/auth/invalidate
+# 4. Confirm unauthenticated request is rejected
+curl -o /dev/null -w "%{http_code}" https://localhost:5002/api/products
+# → 401
+
+# 5. Force token invalidation (next DummyJSON service call will re-authenticate)
+curl -X POST https://localhost:5002/api/auth/invalidate \
+  -H "Authorization: Bearer $TOKEN"
 # → { "message": "Token cache cleared" }
 ```
 
@@ -3446,6 +3945,10 @@ And update the repository endpoints from `/users` to `/products`, `/todos`, etc.
 | Circular dependency at startup | `DummyJsonAuthHandler` → `ITokenService` → `IHttpClientFactory` → `DummyJsonAuthHandler` | `TokenService` uses the `"DummyJsonRaw"` named client (no handler); the typed client uses the handler. No cycle. |
 | Token expires during long-running batch | Proactive refresh margin too small | Increase the `60-second` safety margin in `TokenService.GetAccessTokenAsync` or decrease `TokenExpiryMinutes` |
 | `SemaphoreSlim` deadlock | `await` inside a `lock` statement | The code correctly uses `SemaphoreSlim.WaitAsync()` (async-safe). Never use `lock` with `await`. |
+| `InvalidOperationException: Jwt:Secret is not configured` at startup | User secret not set | Run `dotnet user-secrets set "Jwt:Secret" <base64-key>` or set `Jwt__Secret` environment variable |
+| `401` returned by the WebAPI for all data endpoints | `[Authorize]` present but `UseAuthentication()` missing or ordered after `UseAuthorization()` | Ensure `app.UseAuthentication()` appears **before** `app.UseAuthorization()` in `Program.cs` |
+| `IDX10501: Signature validation failed` | Client is sending the DummyJSON token instead of the portal JWT | After login, the client must store and forward the `accessToken` field from the login response, which is now the portal-signed JWT — not the DummyJSON one |
+| `IDX10223: Lifetime validation failed` | Portal JWT has expired | `ClockSkew = TimeSpan.Zero` is intentional. Client must re-authenticate. Increase `ExpiresInMins` in the login request if sessions are too short. |
 
 > [!TIP]
 > **Extending the Gateway**
