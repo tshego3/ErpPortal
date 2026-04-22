@@ -673,6 +673,11 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
 
 Even if you use Serilog, your classes should still inject `ILogger<T>` from `Microsoft.Extensions.Logging`. This keeps your business logic decoupled from the specific logging library.
 
+> [!TIP]
+> **Serilog Documentation**
+>
+> For advanced configurations, Sinks (Seq, SQL, Elasticsearch), and Enrichment, refer to the [official Serilog documentation](https://serilog.net/) and the [Serilog.AspNetCore repository](https://github.com/serilog/serilog-aspnetcore).
+
 ### `Core/Exceptions/AppException.cs`
 
 ```csharp
