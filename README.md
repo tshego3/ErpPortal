@@ -14,7 +14,7 @@
 7. [Infrastructure & Security](#infrastructure-layer)
 8. [White-Labeling & UI System](#ui-system)
 9. [Feature Implementation (The ERP)](#feature-implementation)
-9.1 [Account Controller Auth Flow](#account-controller)
+   - 9.1 [Account Controller Auth Flow](#account-controller)
 10. [State Management (Reactive Services)](#state-management)
 11. [Containerization (Podman/Docker)](#containerization)
 12. [Running the Application](#running)
@@ -493,6 +493,7 @@ Validates configuration at startup — causing a fast crash if required values a
 ```csharp
 // Core/Config/ApiSettings.cs
 using System.ComponentModel.DataAnnotations;
+using Microsoft.Extensions.Configuration;
 
 namespace ErpPortal.Core.Config;
 
@@ -501,6 +502,7 @@ public sealed class ApiSettings
     public const string SectionName = "ApiSettings";
 
     [Required, Url]
+    [ConfigurationKeyName("BaseUrl")]
     public string BaseUrl { get; init; } = string.Empty;
 }
 ```
@@ -566,11 +568,104 @@ public sealed record Todo(
 >
 > Do not define a custom `ILogger` interface. .NET ships `ILogger<T>` which is generic, structured, and supports multiple sinks (Console, Application Insights, Sentry) without any business logic changes. Simply inject `ILogger<MyService>` and swap sinks via `appsettings.json` configuration.
 
+In ASP.NET Web API (and ASP.NET Core), logging and Dependency Injection (DI) go hand-in-hand. You don't need to manually instantiate a logger; instead, you request it in your class's constructor.
+
+#### 1. The Standard Pattern (Constructor Injection)
+To use logging in any class (a Service, Repository, or Controller), inject the generic `ILogger<T>` interface. The `<T>` tells the logger which class is reporting the message, which is vital for filtering logs later.
+
 ```csharp
-// This interface is provided by the framework — no custom definition needed.
-// Inject as: ILogger<MyService> _logger
-// Log structured data: _logger.LogInformation("Login attempt for {Username}", username);
+using Microsoft.Extensions.Logging;
+
+public class MyBusinessService
+{
+    private readonly ILogger<MyBusinessService> _logger;
+
+    // The DI container automatically provides the logger instance
+    public MyBusinessService(ILogger<MyBusinessService> logger)
+    {
+        _logger = logger;
+    }
+
+    public void ProcessData()
+    {
+        _logger.LogInformation("Processing data at {Time}", DateTime.UtcNow);
+        
+        try 
+        {
+            // logic here
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "An error occurred while processing data.");
+        }
+    }
+}
 ```
+
+#### 2. Using Modern C# 12+ Primary Constructors
+If you are using .NET 8, 9, or 10, you can use **Primary Constructors** to remove the boilerplate code of assigning private fields.
+
+```csharp
+public class MyBusinessService(ILogger<MyBusinessService> logger)
+{
+    public void ProcessData()
+    {
+        logger.LogInformation("Clean and concise logging!");
+    }
+}
+```
+
+---
+
+#### 3. Registering Your Class
+For DI to work, your class must be registered in the service container. This is done in `Program.cs`.
+
+```csharp
+var builder = WebApplication.CreateBuilder(args);
+
+// Register your class so the DI container knows how to create it
+builder.Services.AddScoped<MyBusinessService>(); 
+
+var app = builder.Build();
+```
+
+#### 3.1 Service Lifetimes (Transient vs. Scoped vs. Singleton)
+
+When registering a service, you must specify its **lifetime**, which dictates how often the DI container creates a new instance.
+
+| Lifetime | Method | How it works | App to Client (e.g., Web API) | App to App (e.g., Background Workers / Queue Consumers) | When to Use |
+|---|---|---|---|---|---|
+| **Transient** | `AddTransient<T>()` | A new instance is created **every time** you request it. | A separate instance is given to every class that injects it, even within the same HTTP request. | A separate instance is given to every class processing a message. | Lightweight, stateless services or fast execution helpers. |
+| **Scoped** | `AddScoped<T>()` | A new instance is created **once per scope**. | **Once per HTTP request.** All classes handling the same HTTP request share the same instance. | **Once per message/job.** You must manually create a scope (`CreateScope()`) for each unit of work. | Database contexts (`DbContext`), Repositories, HTTP Clients, or services holding request-state. |
+| **Singleton** | `AddSingleton<T>()` | A single instance is created **once** and shared forever. | Shared across **all** clients and all HTTP requests. | Shared globally across the entire application lifecycle. | In-memory caches, configuration services, or expensive connections (e.g., Redis Multiplexer). |
+
+> [!CAUTION]
+> **The Captive Dependency Problem:** Never inject a **Scoped** service into a **Singleton** service. The Singleton will "trap" the Scoped service, effectively turning it into a Singleton. This causes major bugs with stateful services like `DbContext`!
+
+---
+
+#### 4. Critical Best Practices for 2026
+
+* **Structured Logging (Message Templates):** Never use string interpolation (e.g., `$"User {id} logged in"`). Use message templates (e.g., `"User {UserId} logged in", id`). This allows tools like Serilog or Application Insights to treat `{UserId}` as a searchable property rather than just a flat string.
+* **Log Levels:** Use them correctly so you can filter noise in production:
+    * `LogTrace`/`LogDebug`: Deep troubleshooting (usually off in production).
+    * `LogInformation`: High-level flow (user login, service started).
+    * `LogWarning`: Something unexpected happened, but the app is still running.
+    * `LogError`: A specific operation failed.
+    * `LogCritical`: The whole app or a major component crashed.
+* **Avoid Static Loggers:** Resist the urge to use a static `LogManager`. Injecting `ILogger<T>` makes your code unit-testable because you can easily mock the logger in your tests.
+
+#### 5. Advanced: Third-Party Providers
+While the built-in logging is great, most production APIs in 2026 use **Serilog** for more advanced "Sinks" (sending logs to SQL, Seq, or Elasticsearch).
+
+```csharp
+// In Program.cs
+builder.Host.UseSerilog((context, services, configuration) => configuration
+    .ReadFrom.Configuration(context.Configuration)
+    .WriteTo.Console());
+```
+
+Even if you use Serilog, your classes should still inject `ILogger<T>` from `Microsoft.Extensions.Logging`. This keeps your business logic decoupled from the specific logging library.
 
 ### `Core/Exceptions/AppException.cs`
 
