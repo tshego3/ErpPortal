@@ -26,6 +26,7 @@
 18. [How to Debug](#debugging)
 19. [Typography: Libre Franklin](#typography)
 20. [ASP.NET Core Web API Gateway (DummyJSON Wrapper)](#web-api-gateway)
+21. [User Profile State (Session-Scoped Background Fetch)](#user-profile-state)
 
 ---
 
@@ -1036,6 +1037,7 @@ public sealed class AuthService : IAuthService
 
             List<Claim> claims =
             [
+                new(ClaimTypes.NameIdentifier, user.Id.ToString()),
                 new(ClaimTypes.Name,  user.Username),
                 new(ClaimTypes.Email, user.Email),
                 new("FirstName",      user.FirstName),
@@ -1093,8 +1095,11 @@ public sealed class AuthService : IAuthService
         HttpContext? ctx = _httpContextAccessor.HttpContext;
         if (ctx?.User.Identity?.IsAuthenticated is not true) return Task.FromResult<User?>(null);
 
+        string idValue = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0";
+        int.TryParse(idValue, out int userId);
+
         User user = new User(
-            Id:        0,
+            Id:        userId,
             Username:  ctx.User.Identity.Name ?? string.Empty,
             Email:     ctx.User.FindFirst(ClaimTypes.Email)?.Value ?? string.Empty,
             FirstName: ctx.User.FindFirst("FirstName")?.Value ?? string.Empty,
@@ -1508,6 +1513,7 @@ builder.Services.AddScoped<INotificationService, MudBlazorNotificationService>()
 builder.Services.AddScoped<IRepository<User>,    UserRepository>();
 builder.Services.AddScoped<IRepository<Todo>,    TodoRepository>();
 builder.Services.AddScoped<LayoutService>();
+builder.Services.AddScoped<IUserProfileService,  UserProfileService>();
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
 builder.Services.AddMudServices();
@@ -1855,6 +1861,7 @@ public sealed class AccountController : Controller
 
             List<Claim> claims =
             [
+                new(ClaimTypes.NameIdentifier, user.Id.ToString()),
                 new(ClaimTypes.Name, user.Username),
                 new(ClaimTypes.Email, user.Email),
                 new("FirstName", user.FirstName),
@@ -4184,5 +4191,962 @@ And update the repository endpoints from `/users` to `/products`, `/todos`, etc.
 > 4. Create a new controller in `Controllers/`.
 >
 > The token lifecycle, handler, and retry logic are fully reusable — zero changes needed in the infrastructure layer.
+
+---
+
+## 21. User Profile State (Session-Scoped Background Fetch) <a name="user-profile-state"></a>
+
+Authenticated pages need access to the logged-in user's profile — avatar, name, email, phone — without re-fetching on every navigation and without blocking the initial page render. This section implements a **two-phase profile initialisation** pattern:
+
+1. **Phase 1 — Claims Hydration (synchronous):** Populate the profile instantly from cookie claims. The UI renders immediately with the user's name, email, and initials. Zero network calls.
+2. **Phase 2 — Background API Enrichment (asynchronous):** After the first render, fetch the full profile from the API (age, phone, image, etc.) in the background. When the response arrives, the UI updates seamlessly via an `OnProfileChanged` event — the same observable pattern used by `LayoutService`.
+
+The service is registered as **Scoped**. In Interactive Server mode, a Scoped service lives for the **circuit lifetime** (the SignalR connection), which is the user's browser session. The profile persists across all page navigations within the same tab — no re-fetching, no `localStorage`, no JavaScript.
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  User clicks Login                                                          │
+│    ↓                                                                        │
+│  AccountController issues cookie with claims (Id, Name, Email, FirstName…)  │
+│    ↓                                                                        │
+│  Redirect to /dashboard — Interactive Server circuit starts                 │
+│    ↓                                                                        │
+│  UserProfileInitializer.OnInitializedAsync                                  │
+│    → HydrateFromClaims(authState.User)  ← synchronous, instant             │
+│    → UI renders with claims-based profile (FirstName, Email, Initials)      │
+│    ↓                                                                        │
+│  UserProfileInitializer.OnAfterRenderAsync(firstRender: true)               │
+│    → LoadFullProfileAsync()             ← background, non-blocking          │
+│    → API returns full profile (image, phone, age, …)                        │
+│    → OnProfileChanged fires → StateHasChanged() → UI updates seamlessly    │
+│    ↓                                                                        │
+│  User navigates to /users, /tasks, etc.                                     │
+│    → Same scoped service instance — profile is already cached               │
+│    → Zero additional API calls for the rest of the session                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+> [!IMPORTANT]
+> **Why Scoped = Session in Interactive Server**
+>
+> In Blazor Interactive Server, `AddScoped<T>()` creates one instance per SignalR circuit. The circuit persists as long as the browser tab is open. This means a Scoped service effectively behaves as session state — it survives page navigations within the same tab without any explicit session storage, `localStorage`, or JavaScript. If the circuit disconnects (tab closed, network loss), the service is disposed and re-created on reconnect — at which point claims hydration is instant and the background fetch runs once more.
+
+---
+
+### 21.1 Domain Model (`Core/Domain/UserProfile.cs`)
+
+A richer profile record than the `User` domain entity used for login responses. This captures the full profile returned by the `/users/{id}` endpoint — fields like `Phone`, `Age`, `Gender`, and `Image` that are not stored in cookie claims.
+
+```csharp
+using System.Text.Json.Serialization;
+
+namespace ErpPortal.Core.Domain;
+
+/// <summary>
+/// Rich user profile cached for the circuit lifetime.
+/// Phase 1: Hydrated from cookie claims (Id, Username, Email, FirstName, LastName).
+/// Phase 2: Enriched from the API with additional fields (Phone, Age, Gender, Image).
+/// </summary>
+public sealed record UserProfile
+{
+    [JsonPropertyName("id")]
+    public int Id { get; init; }
+
+    [JsonPropertyName("username")]
+    public string Username { get; init; } = string.Empty;
+
+    [JsonPropertyName("email")]
+    public string Email { get; init; } = string.Empty;
+
+    [JsonPropertyName("firstName")]
+    public string FirstName { get; init; } = string.Empty;
+
+    [JsonPropertyName("lastName")]
+    public string LastName { get; init; } = string.Empty;
+
+    [JsonPropertyName("image")]
+    public string Image { get; init; } = string.Empty;
+
+    [JsonPropertyName("phone")]
+    public string Phone { get; init; } = string.Empty;
+
+    [JsonPropertyName("gender")]
+    public string Gender { get; init; } = string.Empty;
+
+    [JsonPropertyName("age")]
+    public int Age { get; init; }
+
+    /// <summary>Computed display name for UI headers and avatars.</summary>
+    public string FullName => $"{FirstName} {LastName}";
+
+    /// <summary>Two-letter initials for avatar fallback when Image is not yet loaded.</summary>
+    public string Initials =>
+        $"{(FirstName.Length > 0 ? FirstName[0] : ' ')}{(LastName.Length > 0 ? LastName[0] : ' ')}";
+}
+```
+
+> [!NOTE]
+> **Why a Separate Record from `User`?**
+>
+> The `User` record (§6) is the login response DTO — it carries `Token` and is shaped for the `/auth/login` endpoint. `UserProfile` is the session-state model — it carries richer fields (`Phone`, `Age`, `Gender`) and computed properties (`FullName`, `Initials`) that are relevant to the UI but not to authentication. Keeping them separate follows the Single Responsibility Principle and avoids polluting the auth model with display concerns.
+
+---
+
+### 21.2 Contract (`Core/Contracts/IUserProfileService.cs`)
+
+```csharp
+using System.Security.Claims;
+using ErpPortal.Core.Domain;
+
+namespace ErpPortal.Core.Contracts;
+
+/// <summary>
+/// Session-scoped service providing the authenticated user's profile.
+/// Hydrates instantly from cookie claims; enriches via background API fetch.
+/// Registered as Scoped — in Interactive Server mode, scoped = circuit lifetime = session.
+/// </summary>
+public interface IUserProfileService
+{
+    /// <summary>The current user profile, or null if unauthenticated.</summary>
+    UserProfile? CurrentProfile { get; }
+
+    /// <summary>True while the background API fetch is in progress.</summary>
+    bool IsLoading { get; }
+
+    /// <summary>True once the full profile has been fetched from the API.</summary>
+    bool IsFullyLoaded { get; }
+
+    /// <summary>
+    /// Raised when the profile state changes — either from claims hydration
+    /// or from the background API enrichment completing.
+    /// Components subscribe to this and call StateHasChanged().
+    /// </summary>
+    event Action? OnProfileChanged;
+
+    /// <summary>
+    /// Synchronously populates the profile from the authenticated user's cookie claims.
+    /// Called during component initialisation — does not block rendering.
+    /// </summary>
+    void HydrateFromClaims(ClaimsPrincipal principal);
+
+    /// <summary>
+    /// Fetches the full user profile from the API in the background.
+    /// Safe to call multiple times — only the first invocation triggers the network call.
+    /// Subsequent calls return immediately (idempotent).
+    /// </summary>
+    Task LoadFullProfileAsync(CancellationToken ct = default);
+}
+```
+
+---
+
+### 21.3 Implementation (`Infrastructure/Services/UserProfileService.cs`)
+
+```csharp
+using System.Security.Claims;
+using ErpPortal.Core.Contracts;
+using ErpPortal.Core.Domain;
+using Microsoft.Extensions.Logging;
+
+namespace ErpPortal.Infrastructure.Services;
+
+/// <summary>
+/// Scoped service that caches the authenticated user's profile for the circuit lifetime.
+///
+/// Two-phase initialisation:
+///   1. HydrateFromClaims — synchronous, populates profile from cookie claims instantly.
+///   2. LoadFullProfileAsync — async background call to the API for the full profile.
+///
+/// Components subscribe to OnProfileChanged and call StateHasChanged() — the same
+/// observable pattern used by LayoutService (§8).
+/// </summary>
+public sealed class UserProfileService : IUserProfileService, IDisposable
+{
+    private readonly IErpHttpClient _http;
+    private readonly ILogger<UserProfileService> _logger;
+    private readonly SemaphoreSlim _loadLock = new(1, 1);
+    private bool _fetchAttempted;
+
+    public UserProfile? CurrentProfile { get; private set; }
+    public bool IsLoading { get; private set; }
+    public bool IsFullyLoaded { get; private set; }
+    public event Action? OnProfileChanged;
+
+    public UserProfileService(
+        IErpHttpClient http,
+        ILogger<UserProfileService> logger)
+    {
+        _http = http;
+        _logger = logger;
+    }
+
+    public void HydrateFromClaims(ClaimsPrincipal principal)
+    {
+        if (principal.Identity?.IsAuthenticated is not true)
+        {
+            CurrentProfile = null;
+            return;
+        }
+
+        string idValue = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0";
+        int.TryParse(idValue, out int userId);
+
+        CurrentProfile = new UserProfile
+        {
+            Id        = userId,
+            Username  = principal.Identity.Name ?? string.Empty,
+            Email     = principal.FindFirst(ClaimTypes.Email)?.Value ?? string.Empty,
+            FirstName = principal.FindFirst("FirstName")?.Value ?? string.Empty,
+            LastName  = principal.FindFirst("LastName")?.Value ?? string.Empty,
+            Image     = string.Empty,
+        };
+
+        _logger.LogDebug(
+            "User profile hydrated from claims for {Username}", CurrentProfile.Username);
+
+        NotifyProfileChanged();
+    }
+
+    public async Task LoadFullProfileAsync(CancellationToken ct = default)
+    {
+        // Guard: no profile, no user Id, or already attempted
+        if (_fetchAttempted || CurrentProfile is null || CurrentProfile.Id == 0)
+            return;
+
+        await _loadLock.WaitAsync(ct);
+        try
+        {
+            // Double-check after acquiring the lock — prevents duplicate fetches
+            // when multiple components call this concurrently
+            if (_fetchAttempted)
+                return;
+
+            _fetchAttempted = true;
+            IsLoading = true;
+            NotifyProfileChanged();
+
+            _logger.LogInformation(
+                "Fetching full profile for user {UserId} in background", CurrentProfile.Id);
+
+            UserProfile fullProfile = await _http.GetAsync<UserProfile>(
+                $"/users/{CurrentProfile.Id}", ct);
+
+            CurrentProfile = fullProfile;
+            IsFullyLoaded = true;
+
+            _logger.LogInformation(
+                "Full profile loaded for {Username} (Age: {Age}, Phone: {Phone})",
+                fullProfile.Username, fullProfile.Age, fullProfile.Phone);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Background profile fetch failed for user {UserId}. " +
+                "Claims-based profile remains active.", CurrentProfile.Id);
+
+            // Graceful degradation: claims-based profile stays in place.
+            // The UI continues to show name/email from cookie claims.
+            // No user-facing error — the fetch is best-effort enrichment.
+        }
+        finally
+        {
+            IsLoading = false;
+            _loadLock.Release();
+            NotifyProfileChanged();
+        }
+    }
+
+    private void NotifyProfileChanged() => OnProfileChanged?.Invoke();
+
+    public void Dispose() => _loadLock.Dispose();
+}
+```
+
+> [!TIP]
+> **Graceful Degradation by Design**
+>
+> If the background API call fails (network error, upstream timeout), the service silently falls back to the claims-based profile. The user sees their name and email from the cookie — only enriched fields like `Phone` and `Age` are missing. No error toast, no broken UI. This is the correct pattern for best-effort background enrichment in production ERPs.
+
+> [!NOTE]
+> **Thread Safety: `SemaphoreSlim` + Double-Check**
+>
+> The `SemaphoreSlim(1, 1)` serialises access to the fetch operation. The `_fetchAttempted` flag with double-check after lock acquisition prevents multiple components (e.g., `MainLayout`, `Dashboard`) from triggering redundant API calls. This is the same concurrency pattern used by `TokenService` in §20.7.
+
+---
+
+### 21.4 DI Registration (`Program.cs`)
+
+The service registration was added to `Program.cs` in §9:
+
+```csharp
+// ─── Application Services (Scoped = per circuit in Interactive Server = session) ─
+builder.Services.AddScoped<IAuthService,         AuthService>();
+builder.Services.AddScoped<INotificationService, MudBlazorNotificationService>();
+builder.Services.AddScoped<IRepository<User>,    UserRepository>();
+builder.Services.AddScoped<IRepository<Todo>,    TodoRepository>();
+builder.Services.AddScoped<LayoutService>();
+builder.Services.AddScoped<IUserProfileService,  UserProfileService>();
+```
+
+> [!IMPORTANT]
+> **Scoped, Not Singleton**
+>
+> `UserProfileService` must be **Scoped**, not Singleton. A Singleton would share one user's profile across all connected clients — a critical security bug. Scoped creates one instance per circuit, isolating each user's profile data.
+
+---
+
+### 21.5 Initializer Component (`Components/Layout/UserProfileInitializer.razor`)
+
+A headless wrapper component that triggers the two-phase profile load. It lives in `MainLayout` and cascades the profile to all child pages.
+
+```razor
+@implements IDisposable
+@inject IUserProfileService UserProfileSvc
+
+@* Cascade the profile to all child components — any page can access it
+   via [CascadingParameter(Name = "UserProfile")] *@
+<CascadingValue Value="UserProfileSvc.CurrentProfile" Name="UserProfile">
+    @ChildContent
+</CascadingValue>
+
+@code {
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState> AuthStateTask { get; set; } = default!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Phase 1: Synchronous hydration from cookie claims.
+        // The UI renders immediately with the user's name, email, and initials.
+        AuthenticationState authState = await AuthStateTask;
+        UserProfileSvc.HydrateFromClaims(authState.User);
+
+        // Subscribe to profile changes — re-render when background fetch completes
+        UserProfileSvc.OnProfileChanged += StateHasChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Phase 2: Background API fetch — the UI has already painted.
+            // This call is non-blocking: the user sees the claims-based profile
+            // instantly, and the full profile (image, phone, age) arrives later.
+            await UserProfileSvc.LoadFullProfileAsync();
+        }
+    }
+
+    public void Dispose()
+    {
+        UserProfileSvc.OnProfileChanged -= StateHasChanged;
+    }
+}
+```
+
+> [!NOTE]
+> **`OnAfterRenderAsync` — Why This Is the Correct Hook**
+>
+> `OnAfterRenderAsync(firstRender: true)` fires **after** the component tree has rendered to the DOM. By placing the API call here, the user sees the page layout and claims-based profile data immediately. The network call happens in the background after the first paint — the UI is never blocked. This is the Blazor equivalent of React's `useEffect(() => { fetch(...) }, [])`.
+
+---
+
+### 21.6 MainLayout Integration (`Components/Layout/MainLayout.razor`)
+
+Wrap the layout body with `UserProfileInitializer` and display the user's profile in the app bar.
+
+```razor
+@inherits LayoutComponentBase
+@inject LayoutService LayoutSvc
+@inject IOptions<BrandingConfig> BrandingOptions
+@inject IUserProfileService UserProfileSvc
+@inject NavigationManager Nav
+@implements IDisposable
+
+<ThemeProvider />
+
+<PageTitle>@_branding.CompanyName</PageTitle>
+
+<UserProfileInitializer>
+    <MudLayout>
+        <MudAppBar Elevation="1" Color="Color.Primary">
+            <MudIconButton Icon="@Icons.Material.Filled.Menu"
+                           Color="Color.Inherit"
+                           Edge="Edge.Start"
+                           OnClick="@(() => LayoutSvc.ToggleSidebar())" />
+            <MudText Typo="Typo.h6" Class="ml-3">@_branding.CompanyName</MudText>
+            <MudSpacer />
+
+            @* ── User Profile Chip (top-right corner) ── *@
+            @if (UserProfileSvc.CurrentProfile is not null)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    @if (UserProfileSvc.IsFullyLoaded
+                         && !string.IsNullOrEmpty(UserProfileSvc.CurrentProfile.Image))
+                    {
+                        <MudAvatar Size="Size.Small">
+                            <MudImage Src="@UserProfileSvc.CurrentProfile.Image"
+                                      Alt="@UserProfileSvc.CurrentProfile.FullName" />
+                        </MudAvatar>
+                    }
+                    else
+                    {
+                        <MudAvatar Size="Size.Small" Color="Color.Secondary">
+                            @UserProfileSvc.CurrentProfile.Initials
+                        </MudAvatar>
+                    }
+
+                    <MudStack Spacing="0">
+                        <MudText Typo="Typo.body2" Color="Color.Inherit">
+                            @UserProfileSvc.CurrentProfile.FullName
+                        </MudText>
+                        @if (UserProfileSvc.IsLoading)
+                        {
+                            <MudProgressLinear Indeterminate="true"
+                                               Color="Color.Secondary"
+                                               Size="Size.Small"
+                                               Style="width:80px;" />
+                        }
+                    </MudStack>
+                </MudStack>
+            }
+        </MudAppBar>
+
+        <MudDrawer @bind-Open="@LayoutSvc.IsSidebarOpen" Elevation="2"
+                   Variant="@DrawerVariant.Responsive">
+            <NavMenu />
+        </MudDrawer>
+
+        <MudMainContent>
+            <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="pt-4">
+                @Body
+            </MudContainer>
+        </MudMainContent>
+    </MudLayout>
+</UserProfileInitializer>
+
+@code {
+    private BrandingConfig _branding = default!;
+
+    protected override void OnInitialized()
+    {
+        _branding = BrandingOptions.Value;
+        LayoutSvc.OnChange += StateHasChanged;
+        UserProfileSvc.OnProfileChanged += StateHasChanged;
+        Nav.LocationChanged += OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+        => LayoutSvc.CloseSidebar();
+
+    public void Dispose()
+    {
+        LayoutSvc.OnChange -= StateHasChanged;
+        UserProfileSvc.OnProfileChanged -= StateHasChanged;
+        Nav.LocationChanged -= OnLocationChanged;
+    }
+}
+```
+
+---
+
+### 21.7 Consuming the Profile in Pages
+
+Any page can access the cached profile via cascading parameter or direct injection — zero additional API calls.
+
+#### Option A: Cascading Parameter (Recommended for Display)
+
+```razor
+@page "/dashboard"
+@rendermode InteractiveServer
+@attribute [Authorize]
+
+<MudText Typo="Typo.h4" Class="mb-4">Welcome, @_profile?.FirstName</MudText>
+
+@if (_profile is not null && _profileService.IsFullyLoaded)
+{
+    <MudGrid>
+        <MudItem xs="12" sm="6" lg="4">
+            <MudPaper Elevation="2" Class="pa-4">
+                <MudStack Row="true" AlignItems="AlignItems.Center">
+                    <MudAvatar Size="Size.Large">
+                        <MudImage Src="@_profile.Image" Alt="@_profile.FullName" />
+                    </MudAvatar>
+                    <MudStack>
+                        <MudText Typo="Typo.h6">@_profile.FullName</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">@_profile.Email</MudText>
+                        <MudText Typo="Typo.caption">@_profile.Phone</MudText>
+                    </MudStack>
+                </MudStack>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    [CascadingParameter(Name = "UserProfile")]
+    private UserProfile? _profile { get; set; }
+
+    @* Direct injection is also available for programmatic access *@
+    [Inject]
+    private IUserProfileService _profileService { get; set; } = default!;
+}
+```
+
+#### Option B: Direct Injection (For Business Logic)
+
+```razor
+@inject IUserProfileService UserProfileSvc
+
+@code {
+    protected override void OnInitialized()
+    {
+        if (UserProfileSvc.CurrentProfile is not null)
+        {
+            // Use profile data for business logic, API calls, etc.
+            int currentUserId = UserProfileSvc.CurrentProfile.Id;
+        }
+    }
+}
+```
+
+---
+
+### 21.8 Claims Pipeline Update
+
+To support the `Id`-based profile fetch, the `ClaimTypes.NameIdentifier` claim was added to both authentication paths:
+
+#### `AccountController.Login` (§9.1 — the primary POST path)
+
+```csharp
+List<Claim> claims =
+[
+    new(ClaimTypes.NameIdentifier, user.Id.ToString()),  // ← Added
+    new(ClaimTypes.Name, user.Username),
+    new(ClaimTypes.Email, user.Email),
+    new("FirstName", user.FirstName),
+    new("LastName", user.LastName),
+    new("Token", user.Token ?? string.Empty),
+];
+```
+
+#### `AuthService.LoginAsync` (§7 — programmatic auth path)
+
+```csharp
+List<Claim> claims =
+[
+    new(ClaimTypes.NameIdentifier, user.Id.ToString()),  // ← Added
+    new(ClaimTypes.Name,  user.Username),
+    new(ClaimTypes.Email, user.Email),
+    new("FirstName",      user.FirstName),
+    new("LastName",       user.LastName),
+    new("Token",          user.Token ?? string.Empty),
+];
+```
+
+#### `AuthService.GetCurrentUserAsync` (§7 — session helper)
+
+```csharp
+public Task<User?> GetCurrentUserAsync()
+{
+    HttpContext? ctx = _httpContextAccessor.HttpContext;
+    if (ctx?.User.Identity?.IsAuthenticated is not true) return Task.FromResult<User?>(null);
+
+    string idValue = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0";
+    int.TryParse(idValue, out int userId);
+
+    User user = new User(
+        Id:        userId,    // ← Was 0, now reads from claims
+        Username:  ctx.User.Identity.Name ?? string.Empty,
+        Email:     ctx.User.FindFirst(ClaimTypes.Email)?.Value ?? string.Empty,
+        FirstName: ctx.User.FindFirst("FirstName")?.Value ?? string.Empty,
+        LastName:  ctx.User.FindFirst("LastName")?.Value ?? string.Empty,
+        Image:     string.Empty,
+        Token:     ctx.User.FindFirst("Token")?.Value);
+
+    return Task.FromResult<User?>(user);
+}
+```
+
+> [!TIP]
+> **`ClaimTypes.NameIdentifier` — The Standard**
+>
+> `ClaimTypes.NameIdentifier` is the well-known claim type for user IDs in the .NET identity model. Using it (rather than a custom `"UserId"` claim) ensures compatibility with ASP.NET Core's `User.FindFirstValue(ClaimTypes.NameIdentifier)` extension methods and any third-party authorization middleware that reads the standard claim.
+
+---
+
+### 21.9 Architecture Summary
+
+| Layer | File | Responsibility |
+|---|---|---|
+| **Domain** | `Core/Domain/UserProfile.cs` | Rich profile record with computed `FullName` and `Initials` |
+| **Contract** | `Core/Contracts/IUserProfileService.cs` | Interface for claims hydration, background fetch, and change notification |
+| **Infrastructure** | `Infrastructure/Services/UserProfileService.cs` | Scoped (circuit-lifetime) implementation with `SemaphoreSlim` thread safety |
+| **Presentation** | `Components/Layout/UserProfileInitializer.razor` | Headless component — triggers Phase 1 + Phase 2 and cascades the profile |
+| **Presentation** | `Components/Layout/MainLayout.razor` | Displays profile chip in app bar; subscribes to `OnProfileChanged` |
+| **DI** | `Program.cs` | `AddScoped<IUserProfileService, UserProfileService>()` |
+
+### 21.10 Debugging
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Profile is `null` on Dashboard | `UserProfileInitializer` not wrapping `@Body` in `MainLayout` | Ensure the initializer component wraps the `<MudLayout>` block |
+| Profile shows `Id = 0` | `ClaimTypes.NameIdentifier` claim not stored during login | Verify both `AccountController.Login` and `AuthService.LoginAsync` emit the `NameIdentifier` claim |
+| Background fetch never fires | `OnAfterRenderAsync` not called | Only fires in Interactive render modes. Confirm the page has `@rendermode InteractiveServer` |
+| Profile re-fetches on every navigation | Service registered as `Transient` instead of `Scoped` | Change to `AddScoped<IUserProfileService, UserProfileService>()` |
+| Duplicate API calls on first load | Multiple components calling `LoadFullProfileAsync` concurrently | `SemaphoreSlim` + `_fetchAttempted` double-check prevents this. Verify the lock is not bypassed. |
+| `ObjectDisposedException` on `SemaphoreSlim` | Circuit disconnected during fetch | The `Dispose()` method on `UserProfileService` releases the semaphore. This is expected on circuit teardown — no action needed. |
+| Avatar shows initials instead of image | `IsFullyLoaded` is `false` — background fetch failed or is still in progress | Check logs for `"Background profile fetch failed"`. Verify the API endpoint `/users/{id}` is reachable. |
+| Captive dependency warning at startup | `UserProfileService` (Scoped) injected into a Singleton | Never inject Scoped services into Singletons. `UserProfileService` should only be consumed by Scoped or Transient services and Blazor components. |
+
+> [!IMPORTANT]
+> **No JavaScript, No `localStorage`, No `sessionStorage`**
+>
+> This implementation uses zero JavaScript interop. The profile state lives entirely in the .NET Scoped service (server-side memory), which persists for the circuit lifetime. Cookie claims provide the initial data; the API enriches it. If the circuit disconnects, the service is re-created and the two-phase initialisation runs again — claims hydration is instant, and the API call is a single lightweight GET. This is structurally simpler and more secure than any client-side storage approach.
+
+---
+
+### 21.11 Session Lifecycle — What Happens When the Circuit Dies
+
+In Blazor Interactive Server, the **SignalR circuit** is the session boundary. Understanding when the circuit dies — and what survives — is critical for reasoning about profile state.
+
+#### Circuit Lifecycle Events
+
+| User Action | Circuit Effect | `UserProfileService` | Authentication Cookie | User Experience |
+|---|---|---|---|---|
+| **In-app navigation** (`/dashboard` → `/users`) | Circuit stays alive | Same instance — profile is cached, zero re-fetches | Present | Seamless, instant |
+| **Browser refresh (F5)** | Circuit is destroyed, a new one is created | Disposed → fresh instance → Phase 1 + Phase 2 runs again | **Survives** (sent with the new HTTP request) | Name/email appear instantly from claims; image/phone arrive ~200ms later |
+| **Browser tab closed** | Circuit is destroyed after `DisconnectedCircuitRetentionPeriod` (~3 min default) | Disposed and GC'd | **Survives on disk** (if `IsPersistent = true`) | Next visit: new circuit, two-phase init runs once |
+| **Browser fully closed + reopened** | No circuit exists | New instance on next visit | **Survives on disk** (if `IsPersistent = true` and not expired) | Same as tab close — instant claims, one API call |
+| **Network loss (temporary)** | Circuit enters disconnected state; Blazor shows reconnection UI | Stays alive during retention period | Present | If reconnected within retention period: profile is still cached. If timeout: circuit dies, new one on reconnect. |
+| **Cookie expired** | N/A | N/A — user is unauthenticated | **Gone** | Redirected to `/login` by `[Authorize]` attribute |
+| **Explicit logout** (`/account/logout`) | Circuit may survive, but cookie is cleared | Profile becomes stale — irrelevant since the user is redirected | **Cleared** by `SignOutAsync` | Redirected to `/login` |
+
+#### Why a Refresh Is Cheap, Not Expensive
+
+A browser refresh (F5) kills the circuit and all scoped services. This sounds expensive, but the two-phase design reduces the cost to:
+
+1. **Phase 1 — Claims Hydration (0ms network, synchronous):** The authentication cookie is sent with the page request. ASP.NET Core's cookie middleware deserialises the `ClaimsPrincipal` before the circuit even starts. `HydrateFromClaims` reads `Id`, `Name`, `Email`, `FirstName`, `LastName` directly from the claims — no network call, no database query.
+
+2. **Phase 2 — Background API Fetch (1 lightweight GET, non-blocking):** After the UI has painted with claims-based data, `OnAfterRenderAsync` fires a single `GET /users/{id}` call to enrich the profile with `Image`, `Phone`, `Age`, `Gender`. This happens in the background — the user is already interacting with the page.
+
+```text
+Refresh (F5):
+  ├── Browser sends cookie with page request
+  ├── ASP.NET Core deserialises ClaimsPrincipal from cookie   ← 0ms network
+  ├── New circuit starts, new UserProfileService created
+  ├── Phase 1: HydrateFromClaims()                           ← synchronous
+  ├── UI renders with name, email, initials                   ← user sees content
+  └── Phase 2: GET /users/{id} in background                 ← ~200ms, non-blocking
+       └── OnProfileChanged → avatar and phone update
+```
+
+The total user-perceived cost of a refresh is **zero wait time** — the claims-based profile is displayed before the API call even starts.
+
+#### Configuring the Disconnected Circuit Retention Period
+
+When a user's connection drops temporarily (e.g., laptop sleep, Wi-Fi switch), Blazor holds the circuit in memory for a configurable retention period. If the browser reconnects within this window, the original scoped services — including the cached profile — are still alive.
+
+```csharp
+// Program.cs — adjust the retention period (default is ~3 minutes)
+builder.Services.AddServerSideBlazor(options =>
+{
+    options.DisconnectedCircuitRetentionPeriod = TimeSpan.FromMinutes(5);
+});
+```
+
+> [!CAUTION]
+> **Memory Trade-off**
+>
+> Increasing `DisconnectedCircuitRetentionPeriod` keeps more circuits alive in server memory. For an ERP with many concurrent users, monitor memory usage and tune this value based on your hosting tier. The default of ~3 minutes is a good balance for most deployments.
+
+---
+
+### 21.12 Why Not `HttpContext.Session`?
+
+A common instinct — especially from MVC or Razor Pages backgrounds — is to use `HttpContext.Session` for user profile caching. **This does not work in Blazor Interactive Server** and is explicitly warned against by Microsoft.
+
+#### The Fundamental Problem
+
+`HttpContext` only exists during the initial HTTP request that establishes the circuit. Once the SignalR WebSocket takes over (immediately after the first render), `HttpContext` is either `null` or a stale snapshot from the original request. All subsequent component lifecycle calls (`OnInitializedAsync`, `OnParametersSetAsync`, `OnAfterRenderAsync`, event handlers) run over the WebSocket — not over HTTP.
+
+```text
+HTTP Request (initial page load)
+  ├── HttpContext is valid              [Yes]
+  ├── HttpContext.Session is accessible [Yes]
+  ├── Page renders, circuit starts
+  └── SignalR WebSocket takes over
+       ├── HttpContext is null or stale [No]
+       ├── HttpContext.Session throws   [No]
+       └── All subsequent component lifecycle calls happen over WebSocket
+```
+
+> [!WARNING]
+> **From Microsoft's Official Documentation:**
+>
+> *"Don't attempt to use `HttpContext.Session` in Blazor apps. `HttpContext` isn't guaranteed to be available in Blazor components rendered with interactive render modes."*
+>
+> — [ASP.NET Core Blazor state management (server)](https://learn.microsoft.com/aspnet/core/blazor/state-management/server)
+
+#### Comparison: `HttpContext.Session` vs Scoped Service
+
+| Aspect | `HttpContext.Session` | Scoped `UserProfileService` (§21.3) |
+|---|---|---|
+| **Available in Interactive Server** | No — `HttpContext` is `null` after circuit starts | Yes — injected via DI, lives for the circuit |
+| **Survives in-app navigation** | N/A — can't access it | Yes — same scoped instance |
+| **Thread safety** | Requires `ISession.LoadAsync()` + manual locking | Built-in via `SemaphoreSlim` |
+| **Serialization** | Must serialize to `byte[]` or strings | Strongly-typed `UserProfile` record — no serialization |
+| **Type safety** | `session.GetString("key")` — stringly-typed, error-prone | `CurrentProfile.Email` — compile-time checked |
+| **Testability** | Requires mocking `IHttpContextAccessor` + `ISession` | Simple mock of `IUserProfileService` |
+| **Load-balanced deployments** | Requires sticky sessions or distributed cache | Server-local by default; use `[PersistentState]` for distribution (§21.13) |
+| **Microsoft guidance** | Explicitly warned against | Recommended pattern |
+
+#### When `HttpContext` *Is* Accessible
+
+There is exactly **one** safe moment to read `HttpContext` in Blazor SSR: during the initial static render, before the interactive circuit starts. The document already uses this pattern in two places:
+
+1. **`AuthTokenHandler` (§7)** — reads `HttpContext.User.FindFirst("Token")` in a `DelegatingHandler`, which runs during an HTTP request pipeline (not a circuit).
+2. **`App.razor` (§9)** — reads `HttpContext.AcceptsInteractiveRouting()` to decide the render mode. This runs during the initial page render.
+
+For the `UserProfileService`, the profile data comes from the `ClaimsPrincipal` (which is passed explicitly via `HydrateFromClaims`) and from an API call — neither requires `HttpContext.Session`.
+
+---
+
+### 21.13 Circuit State Persistence with `[PersistentState]` (.NET 10)
+
+.NET 10 introduces **circuit state persistence** — the ability to serialize and restore component and service state when a circuit is paused or disconnected. This is built on top of the existing `PersistentComponentState` API and is opt-in via the `[PersistentState]` attribute.
+
+This is particularly valuable for the `UserProfileService` because it means the full profile data can survive circuit pauses (browser tab throttling, mobile app switching, network interruptions) **without** re-fetching from the API.
+
+> [!NOTE]
+> **When to Use `[PersistentState]`**
+>
+> Circuit state persistence is useful when the circuit is **paused** (tab backgrounded, network blip) — not when it is **destroyed** (F5 refresh, browser close). For destroyed circuits, the two-phase claims + API fetch pattern (§21.3) handles recovery. `[PersistentState]` is an additional optimisation layer on top of the existing design.
+
+#### Enabling `[PersistentState]` on `UserProfileService`
+
+Annotate the properties you want persisted across circuit pauses, then register the service for persistence:
+
+```csharp
+using System.Security.Claims;
+using ErpPortal.Core.Contracts;
+using ErpPortal.Core.Domain;
+using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.Logging;
+
+namespace ErpPortal.Infrastructure.Services;
+
+/// <summary>
+/// Scoped service with [PersistentState] support for circuit state persistence.
+/// When the circuit is paused (tab backgrounded, mobile app switch), the profile
+/// is serialized and restored without an API call.
+/// </summary>
+public sealed class UserProfileService : IUserProfileService, IDisposable
+{
+    private readonly IErpHttpClient _http;
+    private readonly ILogger<UserProfileService> _logger;
+    private readonly SemaphoreSlim _loadLock = new(1, 1);
+    private bool _fetchAttempted;
+
+    /// <summary>
+    /// [PersistentState] tells .NET 10 to serialize this property when the circuit
+    /// is paused and restore it when resumed — no API call needed on resume.
+    /// The property must be public with a setter for serialization.
+    /// </summary>
+    [PersistentState]
+    public UserProfile? CurrentProfile { get; set; }
+
+    public bool IsLoading { get; private set; }
+
+    [PersistentState]
+    public bool IsFullyLoaded { get; set; }
+
+    public event Action? OnProfileChanged;
+
+    public UserProfileService(
+        IErpHttpClient http,
+        ILogger<UserProfileService> logger)
+    {
+        _http = http;
+        _logger = logger;
+    }
+
+    public void HydrateFromClaims(ClaimsPrincipal principal)
+    {
+        // If state was restored from persistence, skip hydration
+        if (CurrentProfile is not null)
+        {
+            _logger.LogDebug(
+                "Profile restored from persisted circuit state for {Username}",
+                CurrentProfile.Username);
+            _fetchAttempted = IsFullyLoaded;
+            return;
+        }
+
+        if (principal.Identity?.IsAuthenticated is not true)
+        {
+            CurrentProfile = null;
+            return;
+        }
+
+        string idValue = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0";
+        int.TryParse(idValue, out int userId);
+
+        CurrentProfile = new UserProfile
+        {
+            Id        = userId,
+            Username  = principal.Identity.Name ?? string.Empty,
+            Email     = principal.FindFirst(ClaimTypes.Email)?.Value ?? string.Empty,
+            FirstName = principal.FindFirst("FirstName")?.Value ?? string.Empty,
+            LastName  = principal.FindFirst("LastName")?.Value ?? string.Empty,
+            Image     = string.Empty,
+        };
+
+        _logger.LogDebug(
+            "User profile hydrated from claims for {Username}", CurrentProfile.Username);
+
+        NotifyProfileChanged();
+    }
+
+    public async Task LoadFullProfileAsync(CancellationToken ct = default)
+    {
+        // Guard: no profile, no user Id, already fetched, or restored from persistence
+        if (_fetchAttempted || CurrentProfile is null || CurrentProfile.Id == 0)
+            return;
+
+        await _loadLock.WaitAsync(ct);
+        try
+        {
+            if (_fetchAttempted)
+                return;
+
+            _fetchAttempted = true;
+            IsLoading = true;
+            NotifyProfileChanged();
+
+            _logger.LogInformation(
+                "Fetching full profile for user {UserId} in background", CurrentProfile.Id);
+
+            UserProfile fullProfile = await _http.GetAsync<UserProfile>(
+                $"/users/{CurrentProfile.Id}", ct);
+
+            CurrentProfile = fullProfile;
+            IsFullyLoaded = true;
+
+            _logger.LogInformation(
+                "Full profile loaded for {Username} (Age: {Age}, Phone: {Phone})",
+                fullProfile.Username, fullProfile.Age, fullProfile.Phone);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Background profile fetch failed for user {UserId}. " +
+                "Claims-based profile remains active.", CurrentProfile.Id);
+        }
+        finally
+        {
+            IsLoading = false;
+            _loadLock.Release();
+            NotifyProfileChanged();
+        }
+    }
+
+    private void NotifyProfileChanged() => OnProfileChanged?.Invoke();
+
+    public void Dispose() => _loadLock.Dispose();
+}
+```
+
+#### DI Registration with `RegisterPersistentService`
+
+```csharp
+// Program.cs — register for circuit state persistence
+builder.Services.AddScoped<IUserProfileService, UserProfileService>();
+
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents()
+    .RegisterPersistentService<UserProfileService>(RenderMode.InteractiveServer);
+```
+
+> [!IMPORTANT]
+> **`RegisterPersistentService` is Required**
+>
+> Simply adding `[PersistentState]` to properties is not enough. The service must also be registered with `RegisterPersistentService<T>()` so the framework knows to serialize and restore its state during circuit transitions.
+
+#### How It Works
+
+```text
+Circuit Active (user on /dashboard)
+  ├── UserProfileService has full profile cached
+  │
+  ├── User switches to another mobile app / tab goes to background
+  │   ├── Browser throttles the tab
+  │   ├── Blazor pauses the circuit
+  │   ├── [PersistentState] properties are serialized to MemoryCache
+  │   └── Circuit resources are released
+  │
+  ├── User switches back to the ERP tab
+  │   ├── Blazor resumes the circuit
+  │   ├── [PersistentState] properties are restored from MemoryCache
+  │   ├── CurrentProfile is already populated — no API call needed
+  │   └── HydrateFromClaims detects restored state and skips hydration
+  │
+  └── Result: instant resume, zero API calls, zero UI flash
+```
+
+#### Distributed Persistence with `HybridCache` (Multi-Server Deployments)
+
+For load-balanced deployments where a user may reconnect to a different server, the in-memory `MemoryCache` is insufficient. .NET 10's `HybridCache` with a distributed backend (e.g., Redis) ensures persisted circuit state is available across all servers:
+
+```csharp
+// Program.cs — distributed state persistence with Redis
+builder.Services.AddHybridCache()
+    .AddRedis(builder.Configuration.GetConnectionString("Redis")
+        ?? throw new InvalidOperationException("Redis connection string is required."));
+
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents()
+    .RegisterPersistentService<UserProfileService>(RenderMode.InteractiveServer);
+```
+
+Configure the distributed retention period:
+
+```csharp
+builder.Services.Configure<CircuitOptions>(options =>
+{
+    // In-memory: max 1000 persisted circuits, retained for 2 hours (defaults)
+    options.PersistedCircuitInMemoryMaxRetained = 1000;
+    options.PersistedCircuitInMemoryRetentionPeriod = TimeSpan.FromHours(2);
+
+    // Distributed (Redis): retained for 8 hours (default)
+    options.PersistedCircuitDistributedRetentionPeriod = TimeSpan.FromHours(8);
+});
+```
+
+> [!TIP]
+> **State Persistence Decision Tree**
+>
+> ```text
+> Is the circuit still alive (user navigating within the app)?
+> │
+> ├── Yes → Scoped service has the profile cached. Zero cost.
+> │
+> └── No — circuit was interrupted
+>     │
+>     ├── Paused (tab backgrounded, mobile app switch)
+>     │   └── [PersistentState] restores from MemoryCache/Redis. Zero API calls.
+>     │
+>     ├── Destroyed (F5 refresh, browser close + reopen)
+>     │   └── Two-phase recovery: claims hydration (instant) + 1 API call (background).
+>     │
+>     └── Cookie expired
+>         └── Redirect to /login. No profile needed.
+> ```
+
+> [!CAUTION]
+> **Serialization Constraint**
+>
+> `[PersistentState]` requires properties to be JSON-serializable. The `UserProfile` record uses `[JsonPropertyName]` attributes and contains only primitives and strings — it serializes cleanly. Avoid adding non-serializable types (e.g., `HttpClient`, `ILogger`, `Stream`) to `[PersistentState]` properties. The computed properties (`FullName`, `Initials`) are read-only and are not serialized — they are recomputed on access.
 
 ---
