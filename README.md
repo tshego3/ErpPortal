@@ -14,7 +14,7 @@
 7. [Infrastructure & Security](#infrastructure-layer)
 8. [White-Labeling & UI System](#ui-system)
 9. [Feature Implementation (The ERP)](#feature-implementation)
-   - 9.1 [Account Controller Auth Flow](#account-controller)
+9.1 [Account Controller Auth Flow](#account-controller)
 10. [State Management (Reactive Services)](#state-management)
 11. [Containerization (Podman/Docker)](#containerization)
 12. [Running the Application](#running)
@@ -142,12 +142,16 @@ dotnet add package Microsoft.AspNetCore.Components.QuickGrid
 
 # HTTP client JSON helpers
 dotnet add package Microsoft.Extensions.Http
+dotnet add package Microsoft.Extensions.Logging
 
 # Fluent validation (optional, for complex forms)
 dotnet add package FluentValidation.DependencyInjectionExtensions
 
 # Output caching middleware
 # (included in Microsoft.AspNetCore.OutputCaching — no extra package needed for .NET 10)
+
+# Structured logging with Serilog
+dotnet add package Serilog.AspNetCore
 
 # Unit testing (see Appendix)
 dotnet add package xunit --project ErpPortal.Tests
@@ -176,6 +180,8 @@ Replace the default contents with a strict, production-grade configuration:
     <PackageReference Include="MudBlazor" Version="7.*" />
     <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.*" />
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.*" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.*" />
+    <PackageReference Include="Serilog.AspNetCore" Version="9.*" />
   </ItemGroup>
 
 </Project>
