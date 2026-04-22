@@ -14,7 +14,7 @@
 7. [Infrastructure & Security](#infrastructure-layer)
 8. [White-Labeling & UI System](#ui-system)
 9. [Feature Implementation (The ERP)](#feature-implementation)
-   - 9.1 [Account Controller Auth Flow](#account-controller)
+    - 9.1 [Account Controller Auth Flow](#account-controller)
 10. [State Management (Reactive Services)](#state-management)
 11. [Containerization (Podman/Docker)](#containerization)
 12. [Running the Application](#running)
@@ -142,7 +142,9 @@ dotnet add package Microsoft.AspNetCore.Components.QuickGrid
 
 # HTTP client JSON helpers
 dotnet add package Microsoft.Extensions.Http
-dotnet add package Microsoft.Extensions.Logging
+# dotnet add package Microsoft.Extensions.Logging
+# NOTE: Do NOT add Microsoft.Extensions.Logging to Web/API projects. 
+# It is included in the ASP.NET Core shared framework.
 
 # Fluent validation (optional, for complex forms)
 dotnet add package FluentValidation.DependencyInjectionExtensions
@@ -180,7 +182,7 @@ Replace the default contents with a strict, production-grade configuration:
     <PackageReference Include="MudBlazor" Version="7.*" />
     <PackageReference Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.*" />
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.*" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.*" />
+    <!-- <PackageReference Include="Microsoft.Extensions.Logging" Version="10.*" /> -->
     <PackageReference Include="Serilog.AspNetCore" Version="9.*" />
   </ItemGroup>
 
@@ -660,6 +662,52 @@ When registering a service, you must specify its **lifetime**, which dictates ho
     * `LogError`: A specific operation failed.
     * `LogCritical`: The whole app or a major component crashed.
 * **Avoid Static Loggers:** Resist the urge to use a static `LogManager`. Injecting `ILogger<T>` makes your code unit-testable because you can easily mock the logger in your tests.
+* **Direct Framework Logging:** Do not add `Microsoft.Extensions.Logging` to WebAPI or Blazor Web projects. Use `ILogger<T>` directly; it is already available in the ASP.NET Core shared framework.
+* **Logging in Class Libraries:** If you need logging in a non-web class library (e.g., a shared Domain or Logic project), add `Microsoft.Extensions.Logging.Abstractions` there instead of the full logging implementation.
+
+#### Example: Logging in a Non-Web Class Library (`Core.csproj`)
+
+In a pure logic library (using `Microsoft.NET.Sdk`), you must explicitly add the abstractions package to access the logging interfaces.
+
+```xml
+<!-- ErpPortal.Core/ErpPortal.Core.csproj -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <!-- Provides ILogger without pulling in the entire hosting stack -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.*" />
+  </ItemGroup>
+</Project>
+```
+
+Usage in the library:
+
+```csharp
+namespace ErpPortal.Core.Services;
+using Microsoft.Extensions.Logging;
+
+public sealed class ProcessService(ILogger<ProcessService> logger)
+{
+    public void Run() => logger.LogInformation("Process started in the Core layer.");
+}
+```
+
+#### Example: Web/API Project (Zero Setup)
+
+In your WebAPI or Blazor project (`Microsoft.NET.Sdk.Web`), `ILogger<T>` is available globally. Do **not** add any logging NuGet packages unless you are adding a third-party sink like Serilog.
+
+```csharp
+// Controllers/OrderController.cs in ErpPortal.Api
+[ApiController]
+public class OrderController(ILogger<OrderController> logger) : ControllerBase
+{
+    [HttpGet]
+    public IActionResult Get() 
+    {
+        logger.LogDebug("Fetching orders..."); 
+        return Ok();
+    }
+}
+```
 
 #### 5. Advanced: Third-Party Providers
 While the built-in logging is great, most production APIs in 2026 use **Serilog** for more advanced "Sinks" (sending logs to SQL, Seq, or Elasticsearch).
