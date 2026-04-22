@@ -14,7 +14,7 @@
 7. [Infrastructure & Security](#infrastructure-layer)
 8. [White-Labeling & UI System](#ui-system)
 9. [Feature Implementation (The ERP)](#feature-implementation)
-9.1 [Account Controller Auth Flow](#account-controller)
+   - 9.1 [Account Controller Auth Flow](#account-controller)
 10. [State Management (Reactive Services)](#state-management)
 11. [Containerization (Podman/Docker)](#containerization)
 12. [Running the Application](#running)
