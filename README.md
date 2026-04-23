@@ -246,6 +246,44 @@ dotnet user-secrets init
 dotnet user-secrets set "ApiSettings:BaseUrl" "https://your-api.example.com"
 ```
 
+### Azure Portal Configuration
+
+To update a specific value in your `appsettings.json` from the Azure Portal, you use **Environment Variables**. Azure’s App Service is designed to "overlay" these variables onto your JSON structure at runtime without you having to touch the actual file.
+
+In the newer Azure UI, the key is to use **double underscores (`__`)** to represent the nesting of your JSON objects.
+
+#### Step-by-Step Guide
+
+1.  **Navigate to your Web App:** Open the [Azure Portal](https://portal.azure.com), find your **App Service**, and select it.
+2.  **Go to Environment Variables:** In the left-hand sidebar menu, under the **Settings** section, click on **Environment variables**.
+3.  **Add a New Setting:**
+    * Ensure you are on the **App settings** tab.
+    * Click the **+ Add** button.
+4.  **Enter the Key and Value:**
+    * **Name:** `ApiSettings__BaseUrl`
+    * **Value:** `https://your-production-url.com`
+5.  **Save:**
+    * Click **Apply** at the bottom of the flyout menu.
+    * **CRITICAL:** Click **Apply** again at the bottom of the main Environment variables page to commit the changes. This will restart your Web App to apply the new configuration.
+
+#### Why the Double Underscore?
+
+In .NET configuration, the hierarchical structure of your JSON is flattened into environment variables using a delimiter. While a colon (`:`) works in some local environments, **double underscores (`__`)** are the standard for cross-platform compatibility, especially in Linux-based Azure App Services.
+
+| JSON Path | Azure Setting Name |
+| :--- | :--- |
+| `ApiSettings` > `BaseUrl` | `ApiSettings__BaseUrl` |
+| `Logging` > `LogLevel` > `Default` | `Logging__LogLevel__Default` |
+
+> [!TIP]
+> **Slot Settings**
+> 
+> If you are using **Deployment Slots** (like a "Staging" slot), you will see a checkbox labeled **Deployment slot setting**. 
+> * **Checked:** This value "sticks" to the slot. If you swap Staging to Production, the production site will keep its own URL, and staging will keep its own.
+> * **Unchecked:** The value follows the code. If you swap, the value moves with the site. 
+> 
+> For a `BaseUrl`, you usually want this **checked** so each environment points to its respective API.
+
 ---
 
 ### 4.1 Multi-Project Orchestration (VS Code) <a name="multi-project-orchestration"></a>
