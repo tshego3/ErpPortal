@@ -5188,3 +5188,55 @@ builder.Services.Configure<CircuitOptions>(options =>
 > `[PersistentState]` requires properties to be JSON-serializable. The `UserProfile` record uses `[JsonPropertyName]` attributes and contains only primitives and strings — it serializes cleanly. Avoid adding non-serializable types (e.g., `HttpClient`, `ILogger`, `Stream`) to `[PersistentState]` properties. The computed properties (`FullName`, `Initials`) are read-only and are not serialized — they are recomputed on access.
 
 ---
+
+## 22. Remote Debugging <a name="remote-debugging"></a>
+
+Remote debugging a **.NET 10** API on Azure with **Visual Studio 2022** requires a few specific "handshakes" between your local machine and the cloud. 
+
+The updated 2026 Azure UI has moved some of these toggles, so follow the updated path below.
+
+---
+
+### 22.1 Enable Debugging in the Azure Portal
+You must explicitly give Azure permission to allow a debugger to attach to your process.
+
+1.  Open the **Azure Portal** and go to your **App Service**.
+2.  In the left-hand menu, navigate to **Settings** > **Environment variables**.
+3.  Switch to the **General settings** tab (at the top).
+4.  Scroll down to the **Debugging** section:
+    * **Remote Debugging:** Set to **On**.
+    * **Remote Visual Studio version:** Select **Visual Studio 2022**.
+5.  Click **Save** at the top. This will restart your app.
+
+---
+
+### 22.2 Deploy a "Debug" Build
+You cannot debug an application that was published using the "Release" configuration because the code is optimized and the symbols ($PDB$ files) are missing.
+
+1.  In Visual Studio, right-click your project > **Publish**.
+2.  In the Publish summary, click the **Edit** (pencil icon) next to **Settings**.
+3.  Change **Configuration** from `Release` to **Debug**.
+4.  Click **Save** and then **Publish** again.
+
+---
+
+### 22.3 Attach the Debugger
+Now that the server is ready and the code is "debuggable," link VS2022 to the cloud process.
+
+1.  In VS2022, go to **Debug** > **Attach to Process...** (or press `Ctrl+Alt+P`).
+2.  **Connection Type:** Select **Microsoft Azure App Services**.
+3.  **Connection Target:** Click **Find...**.
+    * Sign in to your Azure account if prompted.
+    * Select your Subscription and find your App Service in the list.
+    * Click **OK**.
+4.  **Process List:** Look for the process named **`w3wp.exe`** (this is the IIS worker process for Windows) or **`dotnet`** (if you are running on Linux).
+5.  Select the process and click **Attach**.
+
+---
+
+### 22.4 Troubleshooting Common "2026" Hurdles
+* **Basic Auth:** Many Azure tenants now disable "Basic Auth" by default for security. If you can't connect, go to your App Service **Configuration** > **General Settings** and ensure **Scm Basic Auth Publishing Credentials** is set to **On**.
+* **Symbols Not Loaded:** If your breakpoints are "hollow" or say "Symbols not loaded," go to **Debug** > **Windows** > **Modules**. Find your DLL, right-click, and select **Load Symbols**.
+* **Firewall/VPN:** If you are on a corporate network, ensure port `4026` (for VS2022) is open for outbound traffic, as the debugger uses this to communicate with the remote agent.
+
+> **Note:** Remote debugging freezes the threads of your live application. If you are debugging a production app, users will experience a "hang" while you are paused at a breakpoint!
