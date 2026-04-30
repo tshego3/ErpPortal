@@ -3029,6 +3029,34 @@ In the Azure Portal under **Configuration > Application settings**, add:
 >
 > ASP.NET Core uses `__` (double underscore) to represent nesting in environment variable names. `ApiSettings__BaseUrl` maps to `appsettings.json`'s `ApiSettings.BaseUrl`. This is the .NET equivalent of Netlify's flat environment variable system.
 
+#### Azure Web App Configuration
+
+When deploying the ErpPortal to an Azure App Service, enable the following settings under the Web App resource's **Settings** > **Configuration** > **General Settings**:
+
+##### Web Sockets
+**Status:** Enable  
+**Purpose:** Allows real-time bidirectional communication between the client and server. Required for Blazor Server interactive components to establish SignalR circuits over WebSocket connections. Without this, interactive SSR will not function correctly.
+
+##### Always On
+**Status:** Enable  
+**Purpose:** Keeps the App Service instance running continuously instead of unloading idle apps after 20 minutes. Required for Blazor Server circuits to remain active and responsive. Disabling this causes session drops and circuit disconnections during periods of inactivity.
+
+##### Session Affinity
+**Status:** Enable  
+**Purpose:** Routes all requests from a client to the same App Service instance (sticky sessions). Essential for Blazor Server circuits, which maintain in-memory state tied to a specific instance. Without affinity, requests may route to different instances, breaking the circuit and losing component state.
+
+##### Session Affinity Proxy (Optional)
+**Status:** Enable  
+**Purpose:** Ensures session affinity even when traffic flows through a reverse proxy (e.g., Azure Front Door). Enables affinity at the proxy layer so requests stay bound to the correct backend instance. Recommended when using multi-region or HA deployments with proxies.
+
+##### Remote Debugging
+**Status:** Disable in production; enable only in development  
+**Purpose:** Allows remote attachment of Visual Studio debugger to the running App Service. Useful for troubleshooting live issues in staging environments. Never enable in production for security and performance reasons.
+
+##### Remote Visual Studio Version (2022)
+**Status:** Select "2022" if remote debugging is enabled  
+**Purpose:** Specifies the debugger protocol version. Select the Visual Studio version matching your local IDE. Required to match your development tools for remote debugging to work correctly.
+
 ### Option B: Fly.io (Recommended for self-hosted / open-source deployments)
 
 ```bash
