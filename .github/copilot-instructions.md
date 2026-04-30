@@ -17,6 +17,7 @@ These rules are mandatory for all feature work, bug fixes, and refactors in this
 3. Presentation composes application behavior but should not contain business rules.
 4. Do not bypass abstractions by calling external APIs directly from Razor components.
 5. Register all concrete services through DI in Program.cs or dedicated dependency modules.
+6. **Never create duplicate entity, DTO, or record types outside `Domain`.** All shared types (entities, stored-procedure result classes, value objects) must be defined in Domain and referenced directly. Do not create local copies any other layer. If a type does not yet exist in Domain, add it there first.
 
 ## 3) Dependency Injection Rules
 
@@ -101,6 +102,8 @@ Rules below are derived from the design system and apply to all presentation scr
 2. Avoid noisy or duplicate logs that reduce signal.
 3. Use structured logging patterns and include actionable context.
 4. Never log passwords, tokens, or raw personal information.
+5. Always provide users with a descriptive, actionable failure reason when an operation fails.
+6. User-facing error messages must be clear and safe: explain what failed and the next step, without exposing sensitive internals.
 
 ## 12) Change Management Rules
 
@@ -112,15 +115,21 @@ Rules below are derived from the design system and apply to all presentation scr
 6. Prefer .NET-native and Blazor-native implementations; use JavaScript only as a last resort when there is no practical framework-supported alternative.
 7. No nested syntax: prefer flat, readable structures with guard clauses and early returns instead of deeply nested conditionals, loops, or list hierarchies.
 8. AI agent compliance check is mandatory: before finalizing changes, verify the implementation aligns with `.github/copilot-instructions.md`, all relevant guidance under `.github/skills/`, and applicable guidance in `docs/`.
-9. Prefer `async Task`/`async Task<T>` over `async void` by default. Use `async void` only for framework-required event handlers.
+9. Prefer `async Task`/`async Task<T>` over `async void`/`void` by default. Use `async void`/`void` only for framework-required event handlers.
 10. Use generics for reusable, type-safe abstractions; avoid duplicated type-specific implementations when a constrained generic design is appropriate.
-
----
+11. Keep code simple and straightforward. Avoid complex or clever patterns when a clear, direct implementation can meet the requirement.
+12. If code cannot be understood quickly without comments, simplify it first; comments are for context, not to compensate for avoidable complexity.
+13. Use direct, descriptive, and consistent naming for classes, methods, variables, and files.
+14. Apply DRY by reusing existing related functionality where possible; extend or refactor existing components before creating parallel implementations.
+15. Prefer low-boilerplate implementations: small methods, small diffs, and direct control flow that delivers high impact with minimal code.
+16. Keep logging concise and high-signal: log intent, result, and failures with structured properties, but avoid verbose multi-line logging blocks when one clear statement is enough.
+17. Reuse compact helper methods/constants for repeated error text or repeated computation to reduce noise and keep feature methods easy to scan.
+18. For immutable Domain records used by forms, define a static factory on the record itself (for example `CreateEmpty()`) and consume that from UI code instead of creating local page-level `CreateEmptyModel` helpers.
 
 ## 13) Architecture Layers & Responsibilities
 
 **Dependency flow (each layer references only layers below it):**
-```
+```markdown
 Presentation  ──HTTP──►  API  ──MediatR──►  Application  ──►  Domain
                           │                       │
                           └─────────────────►  Infrastructure
@@ -136,8 +145,6 @@ Presentation  ──HTTP──►  API  ──MediatR──►  Application  ─
 | **Presentation** | Blazor Web App (SSR + Interactive Server), typed HttpClient API clients, Razor pages, authentication state. **Never reference Domain or Application directly — only call the API via HTTP.** | `Components/Pages/`, `Services/`, `Program.cs` |
 | **Tests** | xUnit unit + integration tests. Mirrors Application folder structure. Use EF Core InMemory, never mock `DbSet<T>`. | `Features/[Entity]/{Commands,Queries}/` |
 
----
-
 ## 14) Adding a New Feature (Full Checklist)
 
 Quick outline:
@@ -150,8 +157,6 @@ Quick outline:
 6. **Tests** — Add xUnit handler/validator tests using InMemory database
 
 **Everything auto-wires** through `Program.cs` DI and MediatR assembly scanning — no manual registration needed for handlers/validators.
-
----
 
 ## 15) NASA JPL "Power of 10" Adaptation for C#
 
@@ -167,8 +172,6 @@ These principles are derived from NASA Jet Propulsion Laboratory's strict coding
 8. **Minimal Preprocessor Use**: Avoid complex `#if` directives. Use interfaces and Dependency Injection for platform-specific logic.
 9. **Pointer Safety**: Avoid `unsafe` blocks unless absolutely required for high-performance interop. Prefer safe managed code.
 10. **Compile-Time Warnings**: Treat all compiler warnings as errors.
-
----
 
 ## 16) Production Stability & Debuggability (The 2 AM Rules)
 
@@ -187,8 +190,6 @@ These rules ensure that production incidents can be diagnosed and resolved quick
 9. **Pure Logic Separation**: Keep business logic in "Pure Functions" (input in, output out) separate from I/O (Database/API). Pure functions are trivial to unit test and verify during a crisis.
 10. **Avoid Global State**: Static variables are the enemy of thread safety. Use Scoped or Transient lifetimes via Dependency Injection.
 
----
-
 ## 17) Testability and Architecture Rules
 
 1. **Constructor Injection Only**: Always use Constructor Injection for dependencies. Avoid `internal` or `public` setters for dependencies unless strictly required for specific frameworks.
@@ -201,8 +202,6 @@ These rules ensure that production incidents can be diagnosed and resolved quick
 8. **Composition over Inheritance**: Prefer wrapping functionality in a new class (Decorator or Strategy pattern) rather than creating deep inheritance hierarchies.
 9. **Sealed by Default**: Mark classes as `sealed` unless they are explicitly designed for inheritance. This prevents "accidental" extensibility that breaks logic.
 10. **Test Data Builders**: When generating unit tests, use the Builder pattern or AutoFixture approach to keep tests resilient to constructor changes.
-
----
 
 ## 18) Records vs Classes Rules
 
