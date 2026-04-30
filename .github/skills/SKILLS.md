@@ -1,8 +1,7 @@
+
 # Agent Skills (.NET 10 Blazor SSR)
 
 This document defines what an AI coding agent is expected to do well in this repository.
-
----
 
 ## Architecture Overview
 
@@ -24,9 +23,9 @@ Tests (xUnit, InMemory DB) — mirrors Application structure
 
 **Golden rule:** Never bypass a layer. Business logic stays in Domain/Application; UI never contains logic.
 
-For a complete walkthrough of adding a new entity, see the feature guide documentation.
+**Domain type rule:** Never create entity, DTO, or record types outside `Domain`. All shared types (entities, classes, value objects) must be defined in Domain and referenced directly from any layer that needs them. Do not create local copies in WebUI, WebAPI, or any other layer.
 
----
+For a complete walkthrough of adding a new entity, see the feature guide documentation.
 
 ## Core Delivery Skills
 
@@ -83,6 +82,14 @@ For a complete walkthrough of adding a new entity, see the feature guide documen
 6. Prefer explicit typing and return types in implementation code; avoid implicit typing unless clarity is preserved.
 7. Prefer `async Task`/`async Task<T>` over `async void`; allow `async void` only for framework-required event handlers.
 8. Use generics for reusable, type-safe abstractions; avoid duplicated type-specific implementations when a constrained generic design is appropriate.
+9. Keep implementations simple and straightforward; avoid complicated designs when a direct approach is sufficient.
+10. Use direct, descriptive, and consistent naming conventions throughout the codebase.
+11. Apply DRY by preferring existing related functionality and extending it before introducing duplicate paths.
+12. Ensure failures surface a descriptive, user-safe reason and a clear next step (for example retry, refresh, or contact support) instead of generic error text.
+13. If code is hard to understand without comments, simplify the implementation first; use comments for context, not to explain avoidable complexity.
+14. Prefer low-boilerplate implementations: small methods, small diffs, and direct control flow that delivers high impact with minimal code.
+15. Keep logging concise and high-signal: log intent, result, and failures with structured properties, but avoid verbose multi-line logging blocks when one clear statement is enough.
+16. Reuse compact helper methods/constants for repeated error text or repeated computation to reduce noise and keep feature methods easy to scan.
 
 ## Typical Skill Applications
 
@@ -101,8 +108,7 @@ For a complete walkthrough of adding a new entity, see the feature guide documen
 6. Use records for DTOs/events/value objects and classes for DI services and I/O logic.
 7. Keep records immutable; prefer `with` expressions for changes and leverage value equality in tests.
 8. Use test builders/AutoFixture patterns for resilient tests and stable constructor evolution.
-
----
+9. For immutable Domain records used by forms, define default/empty construction on the record itself (for example `CreateEmpty()`) and consume that factory from UI pages instead of local page-level model builders.
 
 ## Practical Development Patterns
 
@@ -392,8 +398,6 @@ public sealed class CreateProductCommandHandlerTests
 - Assert one behaviour per test — easier diagnosis on failure
 - Use `await using MockApplicationDbContext context = CreateContext()` to ensure cleanup
 
----
-
 ## Security & Compliance in Development
 
 When implementing features, always check security practices for:
@@ -408,8 +412,6 @@ When implementing features, always check security practices for:
 4. Use `IHttpClientFactory` in services — never `new HttpClient()`
 5. JWT secrets must NOT be in `appsettings.json` — use User Secrets (dev) / Key Vault (prod)
 
----
-
 ## Reference Documentation
 
 | Document | Purpose |
@@ -420,4 +422,4 @@ When implementing features, always check security practices for:
 For fast onboarding, follow this path:
 1. Read **copilot-instructions.md** for architecture + feature checklist
 2. Reference security practices when touching auth, data, or file handling
-3. Use the patterns in this documnt as copy-paste templates
+3. Use the patterns in this document as copy-paste templates
