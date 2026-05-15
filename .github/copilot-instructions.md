@@ -128,6 +128,8 @@ Rules below are derived from the design system and apply to all presentation scr
 16. Keep logging concise and high-signal: log intent, result, and failures with structured properties, but avoid verbose multi-line logging blocks when one clear statement is enough.
 17. Reuse compact helper methods/constants for repeated error text or repeated computation to reduce noise and keep feature methods easy to scan.
 18. For immutable Domain records used by forms, define a static factory on the record itself (for example `CreateEmpty()`) and consume that from UI code instead of creating local page-level `CreateEmptyModel` helpers.
+19. **If hardcoded mock/placeholder data is found in components or pages, treat it as temporary image-to-code scaffolding and replace it before completion** — UI generation from designs may introduce sample text, dates, names, or numeric values, but these must not ship. Replace with parameterized bindings, service calls, or empty-state defaults; if backend wiring is pending, use clearly marked `// TODO:` stubs that return empty collections.
+20. **Avoid unnecessary `if` statements** — do not wrap code in conditionals when the condition is always true, when a single expression or null-coalescing operator suffices, or when the branch adds no distinct behavior. Prefer ternary expressions, pattern matching, null-coalescing (`??`/`??=`), and early returns over redundant conditional blocks.
 
 ## 13) Architecture Layers & Responsibilities
 
