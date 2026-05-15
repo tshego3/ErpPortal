@@ -34,6 +34,7 @@ These rules are mandatory for all feature work, bug fixes, and refactors in this
 3. For auth forms, use POST endpoints with antiforgery tokens rather than interactive event handlers.
 4. Keep login/logout flows controller-based to avoid response-header write timing issues.
 5. Use Authorize attributes for protected pages and enforce deterministic redirects.
+6. **Manage async component state with explicit Loading/Data/Empty flows** — when components fetch data on initialization (e.g., `OnInitializedAsync`), maintain a Loading boolean flag that is set to false only after data is successfully fetched or an error is encountered. Render the component in three distinct states: (1) show a progress indicator while Loading is true, (2) show the populated content when Loading is false and data collection is non-empty, (3) show an empty-state message with contextual guidance when data is empty. This pattern prevents UI rendering race conditions and provides clear feedback to users during network delays.
 
 ## 5) Authentication and Session Rules
 
@@ -76,10 +77,12 @@ Rules below are derived from the design system and apply to all presentation scr
 4. Keep typography aligned to the project font hierarchy for both display and dense operational data.
 5. Prefer atmospheric depth with gradients, surface tiers, and subtle shadow tinting over flat blocks.
 6. Maintain responsive behavior for desktop and mobile without collapsing readability.
-7. **No scoped `.razor.css` files** — use only MudBlazor component API (props, variant, style classes, inline `Style=`) for all styling. Exception: global `wwwroot/app.css` only for baseline/framework-level styles (not component-specific).
+7. **No scoped `.razor.css` files and no `<style>` blocks in `.razor` components** — use only MudBlazor component API (props, variant, style classes, inline `Style=`) for all styling. Exception: global `wwwroot/app.css` only for baseline/framework-level styles (not component-specific). Never embed CSS directly in `.razor` files; all styling must be applied through component attributes or global stylesheets.
 8. **No hardcoded colors anywhere in `.razor` or `.cs` files** — all color values must come from `BrandingConfig` (injected via `IOptions<BrandingConfig>`) or MudBlazor theme CSS variables (`var(--mud-palette-*)`). This ensures white-labeling and automatic dark/light mode compliance.
 9. **Consult MudBlazor component API first** — before implementing any component styling or behavior, review the official MudBlazor documentation (https://mudblazor.com/docs/overview) for native props/features. Use MudBlazor's built-in theming, size/color enums, variant/density controls, and spacing utilities. Only fall back to inline `Style=` when MudBlazor provides no alternative.
 10. **Separate markup and logic in new components** — create `.razor.cs` code-behind files for component logic, parameters, lifecycle, and event handlers. Keep `.razor` files focused on the view template. This improves readability, testability, and maintainability. Example: `MyComponent.razor` + `MyComponent.razor.cs`.
+11. **Use 3-branch rendering pattern for async data flows** — all components that load data asynchronously must follow a consistent three-state rendering pattern: (1) Loading state with `MudProgressCircular` or `MudProgressLinear`, (2) Data state with populated content and controls (only rendered when data is present), (3) Empty state with `MudAlert` or icon-based messaging. This ensures responsive UX feedback and eliminates visual jank or blank screens. Implement via `@if (Loading) { ... } else if (Data.Any()) { ... } else { ... }` in the `.razor` template.
+12. **Filter UX must remain recoverable** — for searchable/filterable tables, render toolbars/search inputs based on the unfiltered source collection (for example `_data.Any()`), not filtered results. When a filter returns zero matches, keep the table shell and controls visible and rely on `NoRecordsContent` (or equivalent in-table empty messaging) so users can clear/adjust filters without getting trapped in page-level empty states.
 
 ## 9) Performance and Caching Rules
 
@@ -210,3 +213,102 @@ These rules ensure that production incidents can be diagnosed and resolved quick
 3. **Avoid Mixed Records**: Do not create mutable records (using `set;`). If data must change, use the `with` keyword to create a new instance.
 4. **Value Equality in Tests**: When testing logic that returns data, leverage record equality for assertions (e.g., `actualRecord.Should().Be(expectedRecord);`).
 5. **Brief Descriptions**: Ensure classes have clear lifecycle roles, while records remain "dumb" data holders with minimal-to-no logic.
+
+## 19) Gold Standard State Management for Blazor Components
+
+**Mandatory pattern** for all components that fetch and display data. This establishes consistent, production-grade behavior across the entire presentation layer.
+
+### State Structure (Required Elements)
+
+Every async data-loading component **must** include:
+
+1. **Injected Dependencies**
+   - `[Inject] public YourApiClient ApiClient { get; set; } = null!;`
+   - `[Inject] public ILogger<YourComponent> Logger { get; set; } = null!;`
+
+2. **Private Fields** (for data storage and user input)
+   - `private List<YourDto> _data = new();` — raw API response
+   - `private string _searchText = string.Empty;` — user input for filters
+   - `private string? _selectedCategory = null;` — category filter state
+
+3. **Public State Properties** (three mandatory flags)
+   - `public bool Loading { get; set; } = true;` — initially true
+   - `public bool HasError { get; set; }` — tracks error state
+   - `public string? ErrorMessage { get; set; }` — user-safe error message
+
+4. **Computed Properties** (derived state, never cached)
+   - `public IEnumerable<YourDto> FilteredData => _data.Where(ApplyFilters).ToList();`
+   - `public int ResultCount => FilteredData.Count();`
+   - `public bool HasSourceData => _data.Any();`
+
+5. **Initialization** (in `OnInitializedAsync`)
+   - Set `Loading = true` at start
+   - Set `Loading = false` **only in finally block** — ensures it's always set
+   - Always wrap in try/catch/finally
+
+6. **Error Handling** (three levels)
+   - **Network errors** (HttpRequestException): "Network error. Please check your connection and try again."
+   - **Business errors** (known exceptions): Domain-specific message
+   - **Unexpected errors** (catch-all): "Failed to load data. Please try again or contact support."
+   - Log all errors with context; never expose stack traces to users
+
+7. **User Actions**
+   - `RefreshAsync()` — user-triggered data reload
+   - `ResetFilters()` — clear all filters and error state
+   - `ClearSearch()` — clear search field only
+
+### 4-Branch Rendering Pattern (Exact Order)
+
+```
+@if (Loading)
+    --> Show MudProgressCircular or MudProgressLinear
+else if (HasError)
+    --> Show MudAlert with error message + "Try Again" button
+else if (HasSourceData)
+    --> Show table + toolbar with filters + result count
+else
+    --> Show MudAlert empty state with contextual guidance
+```
+
+### Non-Negotiable Rules
+
+1. **Always use try/catch/finally** — `Loading = false` in finally block only
+2. **Never display raw data** — always use `FilteredData` computed property
+3. **Never cache computed results** — recalculate on every render
+4. **Always provide user-safe error messages** — never expose internals
+5. **Always log errors** — use `ILogger.LogError()` with exception
+6. **Always show result count** when data is displayed
+7. **Always show "Try Again" button** in error state
+8. **Always initialize collections to `new()`** — never leave them null
+9. **Always use `@key` only for large dynamic lists** — avoid unnecessary directives
+10. **Never use `StateHasChanged()`** — let Blazor handle rendering automatically
+11. **For filterable grids, never gate toolbar/table visibility on filtered rows** — use source-data availability for branch selection and in-table `NoRecordsContent` for zero-match filters.
+
+### Anti-Patterns (Explicitly Forbidden)
+
+- DO NOT: Displaying `_data` directly in template
+- DO NOT: Setting `Loading = false` in multiple places
+- DO NOT: Silent exception handling (catch without logging)
+- DO NOT: Showing raw error messages to users
+- DO NOT: Rendering without checking `Loading` or `HasResults`
+- DO NOT: Mixing filter logic in the template
+- DO NOT: Driving page-level empty states from `FilteredData.Any()` in searchable tables
+- DO NOT: Forgetting to initialize state flags
+- DO NOT: Using `OnAfterRender` for initial data load (use `OnInitializedAsync` only)
+- DO NOT: Hardcoding retry logic (provide a button instead)
+- DO NOT: Storing computed results in fields
+
+### Testing Requirements
+
+Every component using this pattern **must** be tested with:
+1. **Happy path** — successful API call populates data and sets `Loading = false`
+2. **Error path** — exception sets `HasError = true`, `ErrorMessage` is user-safe, error is logged
+3. **Filter path** — `FilteredData` matches filter criteria exactly
+4. **Empty path** — empty result set shows empty state with contextual guidance
+5. **Reset path** — `ResetFilters()` clears all state including errors
+
+See **SKILLS.md** for complete implementation examples, code patterns, and detailed testing strategies.
+
+### Reference
+
+For comprehensive implementation guidance including complete code examples, Razor templates, testing patterns, and detailed anti-patterns, see **skills/SKILLS.md** section "Gold Standard State Management for Blazor Components".
