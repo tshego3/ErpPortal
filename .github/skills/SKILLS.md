@@ -23,7 +23,7 @@ Tests (xUnit, InMemory DB) — mirrors Application structure
 
 **Golden rule:** Never bypass a layer. Business logic stays in Domain/Application; UI never contains logic.
 
-**Domain type rule:** Never create entity, DTO, or record types outside `Domain`. All shared types (entities, classes, value objects) must be defined in Domain and referenced directly from any layer that needs them. Do not create local copies in WebUI, WebAPI, or any other layer.
+**Domain type rule:** Never create entity, DTO, or record types outside `Domain`. All shared types (entities, classes, value objects) must be defined in Domain and referenced directly from any layer that needs them. Do not create local copies in Presentation, API, or any other layer.
 
 For a complete walkthrough of adding a new entity, see the feature guide documentation.
 
@@ -44,6 +44,7 @@ For a complete walkthrough of adding a new entity, see the feature guide documen
 3. Use antiforgery correctly for all state-changing form posts.
 4. Handle route authorization with Authorize attributes and route-level redirect patterns.
 5. Avoid introducing interactive behavior where server-rendered behavior is required.
+6. **Implement 3-branch async state management** — all components that load data asynchronously must maintain a `Loading` boolean flag and render exactly three states: (1) `@if (Loading)` shows progress indicator (`MudProgressCircular` or `MudProgressLinear`), (2) `else if (Data.Any())` shows populated content with controls (table, filters, actions), (3) `else` shows empty state with `MudAlert` and contextual messaging. Set `Loading = false` only after data fetch completes (success or error). This prevents flash-of-content and provides clear feedback during network delays.
 
 ## Authentication and Security Skills
 
@@ -71,6 +72,7 @@ For a complete walkthrough of adding a new entity, see the feature guide documen
 7. Consult MudBlazor docs first (https://mudblazor.com/docs/overview) and prefer native props/variants/density/theming before custom style logic.
 8. For new components, separate view and logic using `.razor` + `.razor.cs` code-behind.
 9. Keep control flow flat: avoid deeply nested syntax and favor guard clauses with early returns.
+10. **Implement 3-branch rendering for async data** — maintain explicit `Loading` boolean in code-behind, set to `false` only after fetch completes, and render three distinct branches in `.razor` template: loading indicator, data table/content, and empty state with contextual guidance.
 
 ## Quality and Maintenance Skills
 
@@ -252,71 +254,555 @@ public class ProductApiClient : BaseApiClient
 }
 ```
 
-### Blazor SSR Page Pattern
+### Blazor SSR Page Pattern with 3-Branch State Management
+
+The **3-branch rendering pattern** is mandatory for all async data loading: Loading → Data → Empty. This ensures consistent UX feedback and prevents visual jank.
+
+**Branch 1: Loading State** — Display while fetching data from the API.  
+**Branch 2: Data State** — Show populated table/content only when data is non-empty.  
+**Branch 3: Empty State** — Show helpful message when no results match filters or no data exists.
 
 ```razor
-@* Presentation/Components/Pages/Products.razor — view only, SSR by default *@
-@page "/products"
+@* Presentation/Components/Pages/MaintenanceJobs.razor — view only, SSR by default *@
+@page "/maintenancejobs"
 @attribute [Authorize]
-@inject ProductApiClient ApiClient
+@inject MaintenanceJobApiClient ApiClient
 @inject NavigationManager Nav
 
-<PageTitle>Products</PageTitle>
+<PageTitle>Maintenance Jobs</PageTitle>
 
-<MudText Typo="Typo.h5" Class="mb-4">Products</MudText>
+<div style="display: flex; flex-direction: column; gap: 16px;">
+    <MudText Typo="Typo.h5">Maintenance Jobs</MudText>
 
-@if (_products == null)
+    @if (Loading)
+    {
+        <!-- Branch 1: Loading State — Show progress while fetching -->
+        <MudProgressCircular Indeterminate="true" />
+    }
+    else if (FilteredJobs.Any())
+    {
+        <!-- Branch 2: Data State — Show table with controls -->
+        <div style="display: flex; gap: 8px; margin-bottom: 16px; align-items: center;">
+            <MudTextField @bind-Value="_searchText" Placeholder="Search by title..." 
+                Variant="Variant.Outlined" Margin="Margin.Dense" 
+                Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Search" 
+                Style="flex: 0 1 300px;" />
+            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="ResetSearch">
+                Clear
+            </MudButton>
+            <MudSpacer />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                StartIcon="@Icons.Material.Filled.Add" Size="Size.Small"
+                href="/maintenancejobs/create">
+                New Job
+            </MudButton>
+        </div>
+
+        <MudTable Items="@FilteredJobs" Hover="true" Breakpoint="Breakpoint.Sm">
+            <HeaderContent>
+                <MudTh>Title</MudTh>
+                <MudTh>Description</MudTh>
+                <MudTh Style="text-align: right;">Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Title">@context.Title</MudTd>
+                <MudTd DataLabel="Description">@context.Description</MudTd>
+                <MudTd DataLabel="Actions" Style="text-align: right;">
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                        href="@Nav.GetUriByPage("/MaintenanceJobDetails", new { id = context.Id })">
+                        View
+                    </MudButton>
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+
+        @if (!string.IsNullOrEmpty(ErrorMessage))
+        {
+            <MudAlert Severity="Severity.Error" Class="mt-4">@ErrorMessage</MudAlert>
+        }
+    }
+    else
+    {
+        <!-- Branch 3: Empty State — Show helpful message -->
+        <MudAlert Severity="Severity.Info" Icon="@Icons.Material.Filled.Info">
+            <MudStack Row="false" Spacing="2">
+                <MudText>No maintenance jobs found.</MudText>
+                <MudText Typo="Typo.body2">
+                    @if (!string.IsNullOrEmpty(_searchText))
+                    {
+                        <span>Try adjusting your search filters or <MudLink Href="javascript:void(0)" OnClick="ResetSearch">clear all filters</MudLink>.</span>
+                    }
+                    else
+                    {
+                        <span>Create your first job to get started.</span>
+                    }
+                </MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                    StartIcon="@Icons.Material.Filled.Add" Size="Size.Small"
+                    href="/maintenancejobs/create">
+                    Create Job
+                </MudButton>
+            </MudStack>
+        </MudAlert>
+    }
+</div>
+```
+
+```csharp
+// Presentation/Components/Pages/MaintenanceJobs.razor.cs — code-behind with state management
+using Microsoft.AspNetCore.Authorization;
+
+public partial class MaintenanceJobs
 {
-    <MudProgressLinear Indeterminate="true" />
+    private List<MaintenanceJobBriefDto> _jobs = new();
+    private string _searchText = string.Empty;
+    
+    public bool Loading { get; set; } = true;
+    public string? ErrorMessage { get; set; }
+
+    public IEnumerable<MaintenanceJobBriefDto> FilteredJobs =>
+        _jobs
+            .Where(j => string.IsNullOrEmpty(_searchText) || 
+                        j.Title.Contains(_searchText, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            Loading = true;
+            ErrorMessage = null;
+            
+            PaginatedList<MaintenanceJobBriefDto>? result = await ApiClient.GetAllAsync();
+            _jobs = result?.Items ?? new List<MaintenanceJobBriefDto>();
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = "Failed to load maintenance jobs. Please try again.";
+            _jobs = new List<MaintenanceJobBriefDto>();
+        }
+        finally
+        {
+            Loading = false;
+        }
+    }
+
+    private void ResetSearch()
+    {
+        _searchText = string.Empty;
+    }
 }
-else if (_products.Count == 0)
+```
+
+## Gold Standard State Management for Blazor Components
+
+**Gold Standard** state management establishes a consistent, production-grade pattern for all Blazor components that fetch and display data. This ensures predictable behavior, clear error handling, and reliable user experience across the application.
+
+### State Structure (Complete Checklist)
+
+Every component following the 3-branch pattern must include:
+
+```csharp
+public partial class YourComponentName
 {
-    <MudAlert Severity="Severity.Info">No products found.</MudAlert>
+    // ============ INJECTED DEPENDENCIES ============
+    [Inject] public YourApiClient ApiClient { get; set; } = null!;
+    [Inject] public ILogger<YourComponentName> Logger { get; set; } = null!;
+
+    // ============ PRIVATE FIELDS (Data Storage) ============
+    // Raw data from API — never displayed directly
+    private List<YourDto> _data = new();
+    
+    // User input for filtering/searching
+    private string _searchText = string.Empty;
+    private string? _selectedCategory = null;
+
+    // ============ PUBLIC PROPERTIES (State) ============
+    // THREE MANDATORY STATE FLAGS
+    public bool Loading { get; set; } = true;
+    public bool HasError { get; set; }
+    public string? ErrorMessage { get; set; }
+
+    // ============ COMPUTED PROPERTIES (Derived State) ============
+    // Always recalculate — never cache these
+    public IEnumerable<YourDto> FilteredData =>
+        _data
+            .Where(item => ApplySearchFilter(item))
+            .Where(item => ApplyStatusFilter(item))
+            .ToList();
+
+    public int ResultCount => FilteredData.Count();
+    public bool HasResults => FilteredData.Any();
+
+    // ============ LIFECYCLE ============
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDataAsync();
+    }
+
+    // ============ PRIVATE METHODS (Internal Logic) ============
+    private async Task LoadDataAsync()
+    {
+        try
+        {
+            // Reset state before fetch
+            Loading = true;
+            HasError = false;
+            ErrorMessage = null;
+
+            // Fetch from API
+            var result = await ApiClient.GetAsync();
+            _data = result?.Items ?? new List<YourDto>();
+
+            Logger.LogInformation("Loaded {Count} items.", _data.Count);
+        }
+        catch (HttpRequestException ex)
+        {
+            HasError = true;
+            ErrorMessage = "Network error. Please check your connection and try again.";
+            Logger.LogError(ex, "Network error loading data");
+            _data = new List<YourDto>();
+        }
+        catch (Exception ex)
+        {
+            HasError = true;
+            ErrorMessage = "Failed to load data. Please try again or contact support.";
+            Logger.LogError(ex, "Unexpected error loading data");
+            _data = new List<YourDto>();
+        }
+        finally
+        {
+            Loading = false;
+        }
+    }
+
+    private bool ApplySearchFilter(YourDto item) =>
+        string.IsNullOrEmpty(_searchText) ||
+        item.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
+        item.Description?.Contains(_searchText, StringComparison.OrdinalIgnoreCase) == true;
+
+    private bool ApplyStatusFilter(YourDto item) =>
+        _selectedCategory == null || item.Category == _selectedCategory;
+
+    private void ResetFilters()
+    {
+        _searchText = string.Empty;
+        _selectedCategory = null;
+        HasError = false;
+        ErrorMessage = null;
+    }
+
+    private void ClearSearch()
+    {
+        _searchText = string.Empty;
+    }
+
+    // ============ PUBLIC METHODS (User Actions) ============
+    public async Task RefreshAsync()
+    {
+        await LoadDataAsync();
+    }
 }
-else
+```
+
+### Razor Template (4-Branch Rendering)
+
+```razor
+@* Always check in this exact order: Loading → HasError → HasResults → Empty *@
+
+@if (Loading)
 {
-    <MudTable Items="@_products" Hover="true" Breakpoint="Breakpoint.Sm">
+    <!-- BRANCH 1: LOADING STATE -->
+    <MudProgressCircular Indeterminate="true" />
+}
+else if (HasError)
+{
+    <!-- BRANCH 2: ERROR STATE (shown before data check) -->
+    <MudAlert Severity="Severity.Error" Icon="@Icons.Material.Filled.ErrorOutline">
+        <MudStack Row="false" Spacing="2">
+            <MudText Typo="Typo.body2">@ErrorMessage</MudText>
+            <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Error" OnClick="RefreshAsync">
+                <MudIcon Icon="@Icons.Material.Filled.Refresh" Size="Size.Small" />
+                Try Again
+            </MudButton>
+        </MudStack>
+    </MudAlert>
+}
+else if (HasResults)
+{
+    <!-- BRANCH 3: DATA STATE — Controls + Table + Results -->
+    
+    <!-- Toolbar with Search, Filters, Actions -->
+    <div style="display: flex; gap: 8px; margin-bottom: 16px; align-items: center; flex-wrap: wrap;">
+        <MudTextField @bind-Value="_searchText" Placeholder="Search..." 
+            Variant="Variant.Outlined" Margin="Margin.Dense" 
+            Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Search" 
+            Class="flex-grow-1" />
+        
+        <MudSelect @bind-Value="_selectedCategory" Label="Category" 
+            Variant="Variant.Outlined" Margin="Margin.Dense" 
+            Dense="true" Style="min-width: 200px;" ClearButton="true">
+            <MudSelectItem Value="@((string?)null)">All</MudSelectItem>
+            <MudSelectItem Value="Active">Active</MudSelectItem>
+            <MudSelectItem Value="Archived">Archived</MudSelectItem>
+        </MudSelect>
+
+        <MudSpacer />
+
+        <div style="display: flex; gap: 8px;">
+            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="ClearSearch">
+                Clear Filters
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                StartIcon="@Icons.Material.Filled.Add" Size="Size.Small"
+                href="/your-component/create">
+                New Item
+            </MudButton>
+        </div>
+    </div>
+
+    <!-- Results Counter -->
+    <MudText Typo="Typo.caption" Class="mb-3">
+        Showing @ResultCount result@(ResultCount != 1 ? "s" : "")
+    </MudText>
+
+    <!-- Data Table -->
+    <MudTable Items="@FilteredData" Hover="true" Breakpoint="Breakpoint.Sm" Dense="true">
         <HeaderContent>
             <MudTh>Name</MudTh>
-            <MudTh>Description</MudTh>
-            <MudTh>Price</MudTh>
-            <MudTh>Actions</MudTh>
+            <MudTh>Category</MudTh>
+            <MudTh>Status</MudTh>
+            <MudTh Style="text-align: right;">Actions</MudTh>
         </HeaderContent>
         <RowTemplate>
             <MudTd DataLabel="Name">@context.Name</MudTd>
-            <MudTd DataLabel="Description">@context.Description</MudTd>
-            <MudTd DataLabel="Price">@context.Price.ToString("C")</MudTd>
-            <MudTd DataLabel="Actions">
+            <MudTd DataLabel="Category">@context.Category</MudTd>
+            <MudTd DataLabel="Status">
+                <MudChip Variant="Variant.Text" Color="@GetStatusColor(context)">
+                    @context.Status
+                </MudChip>
+            </MudTd>
+            <MudTd DataLabel="Actions" Style="text-align: right;">
                 <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
-                    href="@Nav.GetUriByPage("/ProductDetails", new { id = context.Id })">
+                    href="@GetDetailUrl(context)">
                     View
                 </MudButton>
             </MudTd>
         </RowTemplate>
     </MudTable>
 }
-
-<MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
-    href="/products/create" Class="mt-4">
-    New Product
-</MudButton>
-```
-
-```csharp
-// Presentation/Components/Pages/Products.razor.cs — code-behind
-using Microsoft.AspNetCore.Authorization;
-
-public partial class Products
+else
 {
-    private List<ProductBriefDto>? _products;
-
-    protected override async Task OnInitializedAsync()
-    {
-        PaginatedList<ProductBriefDto>? result = await ApiClient.GetAllAsync();
-        _products = result?.Items ?? new List<ProductBriefDto>();
-    }
+    <!-- BRANCH 4: EMPTY STATE -->
+    <MudAlert Severity="Severity.Info" Icon="@Icons.Material.Filled.Info">
+        <MudStack Row="false" Spacing="2">
+            <MudText Typo="Typo.body2">
+                @if (!string.IsNullOrEmpty(_searchText) || _selectedCategory != null)
+                {
+                    <span>No results match your filters.</span>
+                }
+                else
+                {
+                    <span>No items yet.</span>
+                }
+            </MudText>
+            <MudText Typo="Typo.caption">
+                @if (!string.IsNullOrEmpty(_searchText))
+                {
+                    <span>Try clearing your search or filters to see all items.</span>
+                }
+                else
+                {
+                    <span>Create your first item to get started.</span>
+                }
+            </MudText>
+            @if (!string.IsNullOrEmpty(_searchText) || _selectedCategory != null)
+            {
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Info" OnClick="ResetFilters">
+                    Clear All Filters
+                </MudButton>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                    StartIcon="@Icons.Material.Filled.Add" Size="Size.Small"
+                    href="/your-component/create">
+                    Create Item
+                </MudButton>
+            }
+        </MudStack>
+    </MudAlert>
 }
 ```
+
+### Gold Standard Rules Checklist
+
+When implementing state management, enforce these non-negotiables:
+
+1. **Initialization**
+   - Set `Loading = true` at the start of `OnInitializedAsync`
+   - Set `Loading = false` **only in the finally block** — ensures it's always set, regardless of error
+   - Initialize all fields to safe defaults (empty collections, null strings)
+
+2. **Error Handling**
+   - Use **three error levels**: Network (HttpRequestException), Business (known exceptions), Unexpected (catch-all)
+   - **Always set a user-safe error message** — never expose stack traces or internal details
+   - Log errors at appropriate levels: Warning for network, Error for unexpected
+   - Provide a "Try Again" button in error state
+
+3. **Computed Properties**
+   - Mark all filter/search results as computed (not cached) — recalculate on every render
+   - Use `@if (HasResults)` not `@if (_data.Any())` — centralize result logic in property
+   - Never cache computed results in fields; always derive from source data
+
+4. **State Branches (Exact Order)**
+   1. `@if (Loading)` — Show spinner
+   2. `@else if (HasError)` — Show error + retry
+   3. `@else if (HasResults)` — Show table + controls
+   4. `@else` — Show empty state + guidance
+
+5. **Filtering & Search**
+   - Store user input in **private fields** (`_searchText`, `_selectedCategory`)
+   - Implement filter logic in **private methods** that return `bool` (pure functions)
+   - Display filter state in UI (e.g., "Showing X results", "Clear Filters" button)
+   - Show contextual guidance in empty state when filters are active
+
+6. **User Actions**
+   - Provide `ResetFilters()` to clear all filters and error state
+   - Provide `ClearSearch()` for individual search field
+   - Provide `RefreshAsync()` for user-initiated data reload
+   - Show result count when data is displayed
+
+7. **Dependency Injection**
+   - Inject `ApiClient` as `[Inject]` property (not constructor)
+   - Inject `ILogger<T>` for diagnostics
+   - Inject `NavigationManager` only if needed for routing
+
+8. **Private vs Public**
+   - **Private**: Raw data (`_jobs`), user input (`_searchText`), internal methods
+   - **Public**: State flags (`Loading`, `HasError`, `ErrorMessage`), computed results (`FilteredJobs`)
+   - No public setters on computed properties — they are read-only
+
+9. **Null Safety**
+   - Always initialize collections to `new()` — never leave them null
+   - Use `?? new List<T>()` when API returns null
+   - Check `string.IsNullOrEmpty()` before displaying user input in UI
+
+10. **Performance**
+    - Avoid `StateHasChanged()` calls — let Blazor handle rendering automatically
+    - Keep component-level state minimal — move shared state to parent or service
+    - Use `@key` directive only for large dynamic lists (tables with many rows)
+
+### Anti-Patterns (Explicitly Forbidden)
+
+- DO NOT: Display `_data` directly in template — use `FilteredData` computed property
+- DO NOT: Set `Loading = false` in multiple places — use try/catch/finally
+- DO NOT: Store API result in a property that changes unexpectedly — use consistent data flow
+- DO NOT: Catch exceptions silently without logging — always log errors
+- DO NOT: Show raw error messages to users — translate to safe, actionable messages
+- DO NOT: Render without checking `Loading` or `HasResults` — always use 4 branches
+- DO NOT: Mix filter logic in the template — keep LINQ in code-behind
+- DO NOT: Forget to initialize state flags to safe defaults — assume first-load is always Loading
+- DO NOT: Hardcode retry logic — provide a "Try Again" button in error state
+- DO NOT: Use `OnAfterRender` for initial data load — use `OnInitializedAsync` only
+- DO NOT: Drive page-level empty states from `FilteredData.Any()` in searchable tables
+- DO NOT: Store computed results in fields
+
+### Testing Gold Standard State Management
+
+```csharp
+[Fact]
+public async Task OnInitializedAsync_WithSuccessfulApiCall_PopulatesDataAndSetsLoadingFalse()
+{
+    // Arrange
+    var mockClient = new Mock<YourApiClient>();
+    var mockLogger = new Mock<ILogger<YourComponent>>();
+    mockClient.Setup(c => c.GetAsync())
+        .ReturnsAsync(new PaginatedList<YourDto> { Items = new() { new YourDto { Name = "Test" } } });
+
+    var component = new YourComponent
+    {
+        ApiClient = mockClient.Object,
+        Logger = mockLogger.Object
+    };
+
+    // Act
+    await component.OnInitializedAsync();
+
+    // Assert
+    component.Loading.Should().BeFalse();
+    component.HasError.Should().BeFalse();
+    component.ResultCount.Should().Be(1);
+    mockClient.Verify(c => c.GetAsync(), Times.Once);
+}
+
+[Fact]
+public async Task OnInitializedAsync_WithApiException_SetsErrorMessageAndLoggingError()
+{
+    // Arrange
+    var mockClient = new Mock<YourApiClient>();
+    var mockLogger = new Mock<ILogger<YourComponent>>();
+    mockClient.Setup(c => c.GetAsync())
+        .ThrowsAsync(new HttpRequestException("Network failed"));
+
+    var component = new YourComponent
+    {
+        ApiClient = mockClient.Object,
+        Logger = mockLogger.Object
+    };
+
+    // Act
+    await component.OnInitializedAsync();
+
+    // Assert
+    component.Loading.Should().BeFalse();
+    component.HasError.Should().BeTrue();
+    component.ErrorMessage.Should().Contain("Network error");
+    mockLogger.Verify(
+        x => x.Log(
+            LogLevel.Error,
+            It.IsAny<EventId>(),
+            It.IsAny<It.IsAnyType>(),
+            It.IsAny<Exception>(),
+            It.IsAny<Func<It.IsAnyType, Exception, string>>()),
+        Times.Once);
+}
+
+[Fact]
+public void FilteredData_WithActiveSearchText_ReturnsOnlyMatchingItems()
+{
+    // Arrange
+    var component = new YourComponent
+    {
+        // Simulate state after data load
+    };
+    component._data = new()
+    {
+        new YourDto { Name = "Alpha Item" },
+        new YourDto { Name = "Beta Item" },
+        new YourDto { Name = "Gamma Item" }
+    };
+    component._searchText = "Alpha";
+
+    // Act
+    var result = component.FilteredData;
+
+    // Assert
+    result.Should().HaveCount(1);
+    result.First().Name.Should().Be("Alpha Item");
+}
+```
+
+**Testing Rules for Gold Standard:**
+
+- Test initial load with success and error paths (Happy + Sad paths)
+- Verify `Loading` is false after completion (success or error)
+- Verify `HasError` and `ErrorMessage` are set appropriately on exception
+- Verify filtered results match the filter criteria exactly
+- Mock `ILogger` and verify error logs are created on exceptions
+- Test `ResetFilters()` clears all state (search, category, error)
+- Never mock `ApiClient` methods without setting up return values
+- Use `It.IsAny<T>()` for logger assertions when exact values don't matter
 
 ### Testing Pattern
 
