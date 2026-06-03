@@ -1,0 +1,36 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build-all",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"build",
+				"-p:UseSharedCompilation=false",
+				"ErpPortal.Api\\ErpPortal.Api.csproj"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build",
+			"dependsOn": "build-api-debug"
+		},
+		{
+			"label": "build-api-debug",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"build",
+				"-p:UseSharedCompilation=false",
+				"ErpPortal\\ErpPortal.csproj"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		}
+	]
+}
