@@ -1,0 +1,40 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "ErpPortal",
+			"type": "coreclr",
+			"request": "launch",
+			"preLaunchTask": "build-all",
+			"program": "${workspaceFolder}/ErpPortal/bin/Debug/net10.0/ErpPortal.dll",
+			"args": [],
+			"cwd": "${workspaceFolder}/ErpPortal",
+			"stopAtEntry": false,
+			"env": {
+				"ASPNETCORE_ENVIRONMENT": "Development",
+				"ASPNETCORE_URLS": "https://localhost:5001"
+			}
+		},
+		{
+			"name": "ErpPortal.Api",
+			"type": "coreclr",
+			"request": "launch",
+			"preLaunchTask": "build-all",
+			"program": "${workspaceFolder}/ErpPortal.Api/bin/Debug/net10.0/ErpPortal.Api.dll",
+			"args": [],
+			"cwd": "${workspaceFolder}/ErpPortal.Api",
+			"stopAtEntry": false,
+			"env": {
+				"ASPNETCORE_ENVIRONMENT": "Development",
+				"ASPNETCORE_URLS": "https://localhost:5002"
+			}
+		}
+	],
+	"compounds": [
+		{
+			"name": "ErpPortal + ErpPortal.Api",
+			"configurations": ["ErpPortal", "ErpPortal.Api"],
+			"stopAll": true
+		}
+	]
+}
