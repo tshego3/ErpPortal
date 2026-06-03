@@ -323,8 +323,8 @@ Every component using this pattern **must** be tested with:
 4. **Empty path** — empty result set shows empty state with contextual guidance
 5. **Reset path** — `ResetFilters()` clears all state including errors
 
-See **SKILLS.md** for complete implementation examples, code patterns, and detailed testing strategies.
+See **SKILL.md** for complete implementation examples, code patterns, and detailed testing strategies.
 
 ### Reference
 
-For comprehensive implementation guidance including complete code examples, Razor templates, testing patterns, and detailed anti-patterns, see **skills/SKILLS.md** section "Gold Standard State Management for Blazor Components".
+For comprehensive implementation guidance including complete code examples, Razor templates, testing patterns, and detailed anti-patterns, see **skills/SKILL.md** section "Gold Standard State Management for Blazor Components".
