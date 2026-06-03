@@ -1,0 +1,7 @@
+{
+	"dotnet.defaultSolution": "ErpPortal.sln",
+	"csharp.debug.expressionEvaluationOptions.allowFastEvaluate": false,
+	"csharp.debug.expressionEvaluationOptions.allowImplicitFuncEval": true,
+	"csharp.debug.expressionEvaluationOptions.allowToString": false,
+	"csharp.debug.expressionEvaluationOptions.showRawValues": true
+}
