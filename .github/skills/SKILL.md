@@ -1,7 +1,20 @@
-
 # Agent Skills (.NET 10 Blazor SSR)
 
 This document defines what an AI coding agent is expected to do well in this repository.
+
+> **Rule priority:** Rules in this document are grouped by enforcement level. The "Top 5 Non-Negotiables" are **MUST** rules — violations are blockers. Section-level rules are **SHOULD** — follow unless a documented exception applies. Inline suggestions (e.g., "prefer", "consider") are **MAY** — use judgment.
+
+## Top 5 Non-Negotiables
+
+When processing any feature request, these rules take absolute precedence:
+
+1. **4-branch rendering (Interactive Server only)** — every Interactive Server component that loads data asynchronously must render exactly 4 states in order: Loading → Error → Data → Empty (see Gold Standard section below). SSR-only pages use the simpler 2-branch pattern (HasData / Empty) with try/catch error handling.
+2. **`[Authorize]` on all data controllers** — no exceptions; this is a production blocker.
+3. **Layer boundaries** — never bypass Clean Architecture layers; UI never references Domain/Application directly.
+4. **Domain type ownership** — all entity/DTO/record types live in `Domain`; no duplicates in other layers.
+5. **SSR-only by default** — pages use no `@rendermode`, no SignalR, no custom JS unless Interactive Server is justified. New greenfield features may use Interactive Server only when the feature requires real-time UI updates or sub-second feedback that cannot be achieved with form POST round-trips (e.g., real-time data grids with inline editing, collaborative editing, live dashboards). Document the justification in a code comment.
+
+All other rules in this document elaborate on these principles.
 
 ## Architecture Overview
 
@@ -30,7 +43,7 @@ For a complete walkthrough of adding a new entity, see the feature guide documen
 ## Core Delivery Skills
 
 1. Implement full vertical features across Presentation, Application, Domain, Infrastructure, and tests.
-2. Work with Blazor Web App SSR + Interactive Server components without breaking auth, antiforgery, or routing.
+2. Work with Blazor Web App SSR (default) and Interactive Server components (greenfield features only) without breaking auth, antiforgery, or routing. Interactive Server is justified only when the feature requires real-time UI updates or sub-second feedback that cannot be achieved with form POST round-trips (e.g., collaborative editing, live dashboards, inline grid editing).
 3. Use dependency injection consistently through Program.cs registrations and constructor injection.
 4. Build reliable HTTP integrations through typed clients, delegating handlers, and centralized error handling.
 5. Keep architecture clean by preserving boundaries between domain logic, infrastructure, and UI.
@@ -44,7 +57,7 @@ For a complete walkthrough of adding a new entity, see the feature guide documen
 3. Use antiforgery correctly for all state-changing form posts.
 4. Handle route authorization with Authorize attributes and route-level redirect patterns.
 5. Avoid introducing interactive behavior where server-rendered behavior is required.
-6. **Implement 3-branch async state management** — all components that load data asynchronously must maintain a `Loading` boolean flag and render exactly three states: (1) `@if (Loading)` shows progress indicator (`MudProgressCircular` or `MudProgressLinear`), (2) `else if (Data.Any())` shows populated content with controls (table, filters, actions), (3) `else` shows empty state with `MudAlert` and contextual messaging. Set `Loading = false` only after data fetch completes (success or error). This prevents flash-of-content and provides clear feedback during network delays.
+6. **Choose the correct rendering pattern by page type** — see the Gold Standard section (Interactive Server) for full specifications and examples. SSR-only pages use the 2-branch pattern (HasData / Empty) with try/catch error handling in `OnInitializedAsync`.
 
 ## Authentication and Security Skills
 
@@ -65,14 +78,16 @@ For a complete walkthrough of adding a new entity, see the feature guide documen
 
 1. Implement layouts that feel premium and enterprise-grade, not generic dashboard boilerplate.
 2. Follow the no-line sectioning rule: prefer tonal surfaces over 1px border-heavy composition.
-3. Keep typography aligned with the project font hierarchy and high-density data readability.
+3. Keep typography aligned with Libre Franklin hierarchy and high-density data readability.
 4. Read brand colors from configuration; avoid hard-coded color drift from the design system.
-5. Do not use scoped `.razor.css` files for component styling; prefer MudBlazor component API and global baseline styles only.
+5. Do not use scoped `.razor.css` files or `<style>` blocks in `.razor` components for styling; prefer MudBlazor component API and global baseline styles only.
 6. Do not hardcode colors in `.razor` or `.cs`; use `BrandingConfig` and MudBlazor theme variables (`var(--mud-palette-*)`).
 7. Consult MudBlazor docs first (https://mudblazor.com/docs/overview) and prefer native props/variants/density/theming before custom style logic.
 8. For new components, separate view and logic using `.razor` + `.razor.cs` code-behind.
 9. Keep control flow flat: avoid deeply nested syntax and favor guard clauses with early returns.
-10. **Implement 3-branch rendering for async data** — maintain explicit `Loading` boolean in code-behind, set to `false` only after fetch completes, and render three distinct branches in `.razor` template: loading indicator, data table/content, and empty state with contextual guidance.
+10. **Choose the correct rendering pattern for async data by page type** — Interactive Server uses the 4-branch Gold Standard pattern (Loading → Error → Data → Empty). SSR-only pages use the 2-branch pattern (HasData / Empty).
+
+For the comprehensive design system specification (color tokens, typography scale, spacing, elevation, component styling guidance), see **docs/design-system.md**.
 
 ## Quality and Maintenance Skills
 
@@ -105,7 +120,7 @@ For a complete walkthrough of adding a new entity, see the feature guide documen
 1. Follow NASA JPL Power-of-10 style constraints: simple control flow, deterministic loops, bounded function size, and explicit return-value handling.
 2. Apply 2 AM production rules: context-rich exceptions, defensive structured logging, guard clauses, idempotency, and mandatory timeouts.
 3. Propagate `CancellationToken` through async paths and avoid empty `catch {}` blocks.
-4. Prefer constructor injection only; do not use service locator (`IServiceProvider`) in application code.
+4. Prefer constructor injection for services and handlers; do not use service locator (`IServiceProvider`) in application code. Exception: Blazor components use `[Inject]` property injection as required by the framework (see Gold Standard section).
 5. Favor composition over inheritance and seal classes by default unless explicit extensibility is required.
 6. Use records for DTOs/events/value objects and classes for DI services and I/O logic.
 7. Keep records immutable; prefer `with` expressions for changes and leverage value equality in tests.
@@ -254,36 +269,52 @@ public class ProductApiClient : BaseApiClient
 }
 ```
 
-### Blazor SSR Page Pattern with 3-Branch State Management
+### Interactive Server Page Pattern with 4-Branch State Management
 
-The **3-branch rendering pattern** is mandatory for all async data loading: Loading → Data → Empty. This ensures consistent UX feedback and prevents visual jank.
+> **Scope:** This pattern applies **only** to pages/components that use `@rendermode InteractiveServer`. For SSR-only pages, data is fetched once in `OnInitializedAsync` with no client-side re-rendering — those pages render once after `OnInitializedAsync` completes and cannot use event callbacks like `OnClick` or `@bind-Value`.
+
+The **4-branch rendering pattern** is mandatory for Interactive Server components that load data asynchronously: Loading → Error → Data → Empty. This ensures consistent UX feedback, clear error recovery, and prevents visual jank.
 
 **Branch 1: Loading State** — Display while fetching data from the API.  
-**Branch 2: Data State** — Show populated table/content only when data is non-empty.  
-**Branch 3: Empty State** — Show helpful message when no results match filters or no data exists.
+**Branch 2: Error State** — Show user-safe error message with a "Try Again" button.  
+**Branch 3: Data State** — Show populated table/content only when data is non-empty.  
+**Branch 4: Empty State** — Show helpful message when no results match filters or no data exists.
 
 ```razor
-@* Presentation/Components/Pages/MaintenanceJobs.razor — view only, SSR by default *@
-@page "/maintenancejobs"
+@* Presentation/Components/Pages/Products.razor — Interactive Server (requires @rendermode) *@
+@page "/products"
+@rendermode InteractiveServer
 @attribute [Authorize]
-@inject MaintenanceJobApiClient ApiClient
+@inject ProductApiClient ApiClient
 @inject NavigationManager Nav
 
-<PageTitle>Maintenance Jobs</PageTitle>
+<PageTitle>Products</PageTitle>
 
 <div style="display: flex; flex-direction: column; gap: 16px;">
-    <MudText Typo="Typo.h5">Maintenance Jobs</MudText>
+    <MudText Typo="Typo.h5">Products</MudText>
 
     @if (Loading)
     {
         <!-- Branch 1: Loading State — Show progress while fetching -->
         <MudProgressCircular Indeterminate="true" />
     }
-    else if (FilteredJobs.Any())
+    else if (HasError)
     {
-        <!-- Branch 2: Data State — Show table with controls -->
+        <!-- Branch 2: Error State — Show error with retry -->
+        <MudAlert Severity="Severity.Error" Icon="@Icons.Material.Filled.ErrorOutline">
+            <MudStack Row="false" Spacing="2">
+                <MudText Typo="Typo.body2">@ErrorMessage</MudText>
+                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Error" OnClick="RefreshAsync">
+                    Try Again
+                </MudButton>
+            </MudStack>
+        </MudAlert>
+    }
+    else if (FilteredProducts.Any())
+    {
+        <!-- Branch 3: Data State — Show table with controls -->
         <div style="display: flex; gap: 8px; margin-bottom: 16px; align-items: center;">
-            <MudTextField @bind-Value="_searchText" Placeholder="Search by title..." 
+            <MudTextField @bind-Value="_searchText" Placeholder="Search by name..." 
                 Variant="Variant.Outlined" Margin="Margin.Dense" 
                 Adornment="Adornment.End" AdornmentIcon="@Icons.Material.Filled.Search" 
                 Style="flex: 0 1 300px;" />
@@ -293,40 +324,36 @@ The **3-branch rendering pattern** is mandatory for all async data loading: Load
             <MudSpacer />
             <MudButton Variant="Variant.Filled" Color="Color.Primary" 
                 StartIcon="@Icons.Material.Filled.Add" Size="Size.Small"
-                href="/maintenancejobs/create">
-                New Job
+                href="/products/create">
+                New Product
             </MudButton>
         </div>
 
-        <MudTable Items="@FilteredJobs" Hover="true" Breakpoint="Breakpoint.Sm">
+        <MudTable Items="@FilteredProducts" Hover="true" Breakpoint="Breakpoint.Sm">
             <HeaderContent>
-                <MudTh>Title</MudTh>
+                <MudTh>Name</MudTh>
                 <MudTh>Description</MudTh>
                 <MudTh Style="text-align: right;">Actions</MudTh>
             </HeaderContent>
             <RowTemplate>
-                <MudTd DataLabel="Title">@context.Title</MudTd>
+                <MudTd DataLabel="Name">@context.Name</MudTd>
                 <MudTd DataLabel="Description">@context.Description</MudTd>
                 <MudTd DataLabel="Actions" Style="text-align: right;">
                     <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
-                        href="@Nav.GetUriByPage("/MaintenanceJobDetails", new { id = context.Id })">
+                        href="@Nav.GetUriByPage("/ProductDetails", new { id = context.Id })">
                         View
                     </MudButton>
                 </MudTd>
             </RowTemplate>
         </MudTable>
 
-        @if (!string.IsNullOrEmpty(ErrorMessage))
-        {
-            <MudAlert Severity="Severity.Error" Class="mt-4">@ErrorMessage</MudAlert>
-        }
     }
     else
     {
-        <!-- Branch 3: Empty State — Show helpful message -->
+        <!-- Branch 4: Empty State — Show helpful message -->
         <MudAlert Severity="Severity.Info" Icon="@Icons.Material.Filled.Info">
             <MudStack Row="false" Spacing="2">
-                <MudText>No maintenance jobs found.</MudText>
+                <MudText>No products found.</MudText>
                 <MudText Typo="Typo.body2">
                     @if (!string.IsNullOrEmpty(_searchText))
                     {
@@ -334,13 +361,13 @@ The **3-branch rendering pattern** is mandatory for all async data loading: Load
                     }
                     else
                     {
-                        <span>Create your first job to get started.</span>
+                        <span>Create your first product to get started.</span>
                     }
                 </MudText>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" 
                     StartIcon="@Icons.Material.Filled.Add" Size="Size.Small"
-                    href="/maintenancejobs/create">
-                    Create Job
+                    href="/products/create">
+                    Create Product
                 </MudButton>
             </MudStack>
         </MudAlert>
@@ -349,21 +376,22 @@ The **3-branch rendering pattern** is mandatory for all async data loading: Load
 ```
 
 ```csharp
-// Presentation/Components/Pages/MaintenanceJobs.razor.cs — code-behind with state management
+// Presentation/Components/Pages/Products.razor.cs — code-behind with state management
 using Microsoft.AspNetCore.Authorization;
 
-public partial class MaintenanceJobs
+public partial class Products
 {
-    private List<MaintenanceJobBriefDto> _jobs = new();
+    private List<ProductBriefDto> _products = new();
     private string _searchText = string.Empty;
     
     public bool Loading { get; set; } = true;
+    public bool HasError { get; set; }
     public string? ErrorMessage { get; set; }
 
-    public IEnumerable<MaintenanceJobBriefDto> FilteredJobs =>
-        _jobs
-            .Where(j => string.IsNullOrEmpty(_searchText) || 
-                        j.Title.Contains(_searchText, StringComparison.OrdinalIgnoreCase))
+    public IEnumerable<ProductBriefDto> FilteredProducts =>
+        _products
+            .Where(p => string.IsNullOrEmpty(_searchText) || 
+                        p.Name.Contains(_searchText, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
     protected override async Task OnInitializedAsync()
@@ -371,15 +399,17 @@ public partial class MaintenanceJobs
         try
         {
             Loading = true;
+            HasError = false;
             ErrorMessage = null;
             
-            PaginatedList<MaintenanceJobBriefDto>? result = await ApiClient.GetAllAsync();
-            _jobs = result?.Items ?? new List<MaintenanceJobBriefDto>();
+            PaginatedList<ProductBriefDto>? result = await ApiClient.GetAllAsync();
+            _products = result?.Items ?? new List<ProductBriefDto>();
         }
         catch (Exception ex)
         {
-            ErrorMessage = "Failed to load maintenance jobs. Please try again.";
-            _jobs = new List<MaintenanceJobBriefDto>();
+            HasError = true;
+            ErrorMessage = "Failed to load products. Please try again.";
+            _products = new List<ProductBriefDto>();
         }
         finally
         {
@@ -391,16 +421,23 @@ public partial class MaintenanceJobs
     {
         _searchText = string.Empty;
     }
+
+    private async Task RefreshAsync()
+    {
+        await OnInitializedAsync();
+    }
 }
 ```
 
-## Gold Standard State Management for Blazor Components
+## Gold Standard State Management for Interactive Server Components
 
-**Gold Standard** state management establishes a consistent, production-grade pattern for all Blazor components that fetch and display data. This ensures predictable behavior, clear error handling, and reliable user experience across the application.
+> **Scope:** This section applies **only** to pages/components that use `@rendermode InteractiveServer`. For SSR-only pages, data is fetched once in `OnInitializedAsync` with no client-side re-rendering, making Loading states invisible to users, and cannot use event callbacks.
+
+**Gold Standard** state management establishes a consistent, production-grade pattern for Interactive Server Blazor components that fetch and display data. This ensures predictable behavior, clear error handling, and reliable user experience across the application.
 
 ### State Structure (Complete Checklist)
 
-Every component following the 3-branch pattern must include:
+Every component following the 4-branch pattern must include:
 
 ```csharp
 public partial class YourComponentName
@@ -451,7 +488,7 @@ public partial class YourComponentName
             ErrorMessage = null;
 
             // Fetch from API
-            var result = await ApiClient.GetAsync();
+            PaginatedList<YourDto> result = await ApiClient.GetAsync();
             _data = result?.Items ?? new List<YourDto>();
 
             Logger.LogInformation("Loaded {Count} items.", _data.Count);
@@ -508,7 +545,7 @@ public partial class YourComponentName
 ### Razor Template (4-Branch Rendering)
 
 ```razor
-@* Always check in this exact order: Loading → HasError → HasResults → Empty *@
+@* Always check in this exact order: Loading → Error → Data → Empty *@
 
 @if (Loading)
 {
@@ -517,7 +554,7 @@ public partial class YourComponentName
 }
 else if (HasError)
 {
-    <!-- BRANCH 2: ERROR STATE (shown before data check) -->
+    <!-- BRANCH 2: ERROR STATE -->
     <MudAlert Severity="Severity.Error" Icon="@Icons.Material.Filled.ErrorOutline">
         <MudStack Row="false" Spacing="2">
             <MudText Typo="Typo.body2">@ErrorMessage</MudText>
@@ -674,7 +711,7 @@ When implementing state management, enforce these non-negotiables:
    - Show result count when data is displayed
 
 7. **Dependency Injection**
-   - Inject `ApiClient` as `[Inject]` property (not constructor)
+   - Inject `ApiClient` as `[Inject]` property (Blazor components do not support constructor injection)
    - Inject `ILogger<T>` for diagnostics
    - Inject `NavigationManager` only if needed for routing
 
@@ -693,20 +730,18 @@ When implementing state management, enforce these non-negotiables:
     - Keep component-level state minimal — move shared state to parent or service
     - Use `@key` directive only for large dynamic lists (tables with many rows)
 
-### Anti-Patterns (Explicitly Forbidden)
+### Anti-Patterns to Avoid
 
-- DO NOT: Display `_data` directly in template — use `FilteredData` computed property
-- DO NOT: Set `Loading = false` in multiple places — use try/catch/finally
-- DO NOT: Store API result in a property that changes unexpectedly — use consistent data flow
-- DO NOT: Catch exceptions silently without logging — always log errors
-- DO NOT: Show raw error messages to users — translate to safe, actionable messages
-- DO NOT: Render without checking `Loading` or `HasResults` — always use 4 branches
-- DO NOT: Mix filter logic in the template — keep LINQ in code-behind
-- DO NOT: Forget to initialize state flags to safe defaults — assume first-load is always Loading
-- DO NOT: Hardcode retry logic — provide a "Try Again" button in error state
-- DO NOT: Use `OnAfterRender` for initial data load — use `OnInitializedAsync` only
-- DO NOT: Drive page-level empty states from `FilteredData.Any()` in searchable tables
-- DO NOT: Store computed results in fields
+- DO NOT: Directly displaying `_data` in template — use `FilteredData` computed property
+- DO NOT: Setting `Loading = false` in multiple places — use try/catch/finally
+- DO NOT: Storing API result in a property that changes unexpectedly — use consistent data flow
+- DO NOT: Catching exceptions silently without logging — always log errors
+- DO NOT: Showing raw error messages to users — translate to safe, actionable messages
+- DO NOT: Rendering without checking `Loading`, `HasError`, or `HasResults` — always use 4 branches
+- DO NOT: Mixing filter logic in the template — keep LINQ in code-behind
+- DO NOT: Forgetting to initialize state flags to safe defaults — assume first-load is always Loading
+- DO NOT: Hardcoding retry logic — provide a "Try Again" button in error state
+- DO NOT: Using `OnAfterRender` for initial data load — use `OnInitializedAsync` only
 
 ### Testing Gold Standard State Management
 
@@ -715,12 +750,12 @@ When implementing state management, enforce these non-negotiables:
 public async Task OnInitializedAsync_WithSuccessfulApiCall_PopulatesDataAndSetsLoadingFalse()
 {
     // Arrange
-    var mockClient = new Mock<YourApiClient>();
-    var mockLogger = new Mock<ILogger<YourComponent>>();
+    Mock<YourApiClient> mockClient = new Mock<YourApiClient>();
+    Mock<ILogger<YourComponent>> mockLogger = new Mock<ILogger<YourComponent>>();
     mockClient.Setup(c => c.GetAsync())
         .ReturnsAsync(new PaginatedList<YourDto> { Items = new() { new YourDto { Name = "Test" } } });
 
-    var component = new YourComponent
+    YourComponent component = new YourComponent
     {
         ApiClient = mockClient.Object,
         Logger = mockLogger.Object
@@ -740,12 +775,12 @@ public async Task OnInitializedAsync_WithSuccessfulApiCall_PopulatesDataAndSetsL
 public async Task OnInitializedAsync_WithApiException_SetsErrorMessageAndLoggingError()
 {
     // Arrange
-    var mockClient = new Mock<YourApiClient>();
-    var mockLogger = new Mock<ILogger<YourComponent>>();
+    Mock<YourApiClient> mockClient = new Mock<YourApiClient>();
+    Mock<ILogger<YourComponent>> mockLogger = new Mock<ILogger<YourComponent>>();
     mockClient.Setup(c => c.GetAsync())
         .ThrowsAsync(new HttpRequestException("Network failed"));
 
-    var component = new YourComponent
+    YourComponent component = new YourComponent
     {
         ApiClient = mockClient.Object,
         Logger = mockLogger.Object
@@ -758,24 +793,13 @@ public async Task OnInitializedAsync_WithApiException_SetsErrorMessageAndLogging
     component.Loading.Should().BeFalse();
     component.HasError.Should().BeTrue();
     component.ErrorMessage.Should().Contain("Network error");
-    mockLogger.Verify(
-        x => x.Log(
-            LogLevel.Error,
-            It.IsAny<EventId>(),
-            It.IsAny<It.IsAnyType>(),
-            It.IsAny<Exception>(),
-            It.IsAny<Func<It.IsAnyType, Exception, string>>()),
-        Times.Once);
 }
 
 [Fact]
 public void FilteredData_WithActiveSearchText_ReturnsOnlyMatchingItems()
 {
     // Arrange
-    var component = new YourComponent
-    {
-        // Simulate state after data load
-    };
+    YourComponent component = new YourComponent();
     component._data = new()
     {
         new YourDto { Name = "Alpha Item" },
@@ -785,7 +809,7 @@ public void FilteredData_WithActiveSearchText_ReturnsOnlyMatchingItems()
     component._searchText = "Alpha";
 
     // Act
-    var result = component.FilteredData;
+    IEnumerable<YourDto> result = component.FilteredData;
 
     // Assert
     result.Should().HaveCount(1);
@@ -793,7 +817,7 @@ public void FilteredData_WithActiveSearchText_ReturnsOnlyMatchingItems()
 }
 ```
 
-**Testing Rules for Gold Standard:**
+### Testing Rules for Gold Standard
 
 - Test initial load with success and error paths (Happy + Sad paths)
 - Verify `Loading` is false after completion (success or error)
@@ -886,10 +910,10 @@ public sealed class CreateProductCommandHandlerTests
 
 ## Security & Compliance in Development
 
-When implementing features, always check security practices for:
-- **Critical (CR-01 to CR-05):** JWT secrets, Auth attributes, CORS, health checks, file uploads
-- **High (HR-01 to HR-07):** Log injection, HttpClient pooling, OTP rate limiting, CSP headers
-- **Medium (MR-01 to MR-09):** Tenant isolation, ownership checks, caching strategy
+When implementing features, always check security guidelines for:
+- **Critical:** JWT secrets, Auth attributes, CORS, health checks, file uploads
+- **High:** Log injection, HttpClient pooling, OTP rate limiting, CSP headers
+- **Medium:** Tenant isolation, ownership checks, caching strategy
 
 **Key reminders when coding:**
 1. All data controllers **must** have `[Authorize]` attribute
@@ -903,9 +927,9 @@ When implementing features, always check security practices for:
 | Document | Purpose |
 |----------|---------|
 | **copilot-instructions.md** | Core engineering rules, architecture layers, feature checklist |
-| **skills/SKILLS.md** (this file) | Agent capabilities, practical code patterns, testing strategies |
+| **SKILL.md** (this file) | Agent capabilities, practical code patterns, testing strategies |
 
 For fast onboarding, follow this path:
-1. Read **copilot-instructions.md** for architecture + feature checklist
-2. Reference security practices when touching auth, data, or file handling
+1. Read **copilot-instructions.md** sections 13–14 for architecture + feature checklist
+2. Reference security guidelines when touching auth, data, or file handling
 3. Use the patterns in this document as copy-paste templates
