@@ -2,10 +2,16 @@
 
 These rules are mandatory for all feature work, bug fixes, and refactors in this repository.
 
+> **Quick navigation:** For a specific task, focus on the relevant section: Security (7), UI (8), Architecture (13–14), Testing (10). The Decision Guide below determines which rendering pattern applies.
+
+> **Decision guide — which pattern applies?**
+> - **Interactive Server pages** (greenfield features with `@rendermode InteractiveServer`): follow Section 19 Gold Standard (4-branch: Loading → Error → Data → Empty).
+> - **SSR-only pages** (default): use the 2-branch approach (HasData / Empty, plus try/catch error handling in `OnInitializedAsync` surfaced via a message variable). SSR pages render once after `OnInitializedAsync` completes — there is no Loading spinner visible to the user.
+
 ## 1) Platform Identity
 
 1. Stack is .NET 10 + ASP.NET Core + Blazor Web App.
-2. Rendering model is SSR-first; interactivity is opt-in per page/component only where required.
+2. Rendering model is SSR-only by default. Interactive Server render mode is permitted only when a page requires post-render user interaction that cannot be achieved via form POST round-trips (e.g., real-time data grids with inline editing). Pages using interactivity must document the justification in a code comment.
 3. UI framework is MudBlazor.
 4. Architecture is clean-layered: Domain, Application, Infrastructure, and Presentation.
 5. Authentication is cookie-based via server endpoints.
@@ -34,7 +40,7 @@ These rules are mandatory for all feature work, bug fixes, and refactors in this
 3. For auth forms, use POST endpoints with antiforgery tokens rather than interactive event handlers.
 4. Keep login/logout flows controller-based to avoid response-header write timing issues.
 5. Use Authorize attributes for protected pages and enforce deterministic redirects.
-6. **Manage async component state with explicit Loading/Data/Empty flows** — when components fetch data on initialization (e.g., `OnInitializedAsync`), maintain a Loading boolean flag that is set to false only after data is successfully fetched or an error is encountered. Render the component in three distinct states: (1) show a progress indicator while Loading is true, (2) show the populated content when Loading is false and data collection is non-empty, (3) show an empty-state message with contextual guidance when data is empty. This pattern prevents UI rendering race conditions and provides clear feedback to users during network delays.
+6. **Manage async component state by render mode:** Interactive Server components that fetch data must implement Section 19's Gold Standard 4-branch pattern (Loading → HasError → HasSourceData → Empty). SSR-only pages use the simplified 2-branch approach (HasData / Empty) with error handling via a message variable rendered on the single server pass.
 
 ## 5) Authentication and Session Rules
 
@@ -51,6 +57,10 @@ These rules are mandatory for all feature work, bug fixes, and refactors in this
 3. Keep error translation centralized (for example AppException patterns) and user-safe.
 4. Avoid scattering endpoint URLs; read base URLs and options from configuration.
 5. Apply cancellation tokens on async API operations.
+6. **Legacy integration compatibility is mandatory** — when modernizing legacy routes, preserve old endpoint paths, request body contracts, and response shapes through backward-compatible adapters/aliases so existing integrations continue working unchanged.
+7. **No duplicate APIs for legacy compatibility** — do not create separate controllers or action methods that duplicate existing functionality just to serve legacy routes. Instead, add legacy route aliases (e.g., `[HttpPost("/User/Login")]`) directly on the existing controller actions so that both old and new paths resolve to the same implementation. When an existing API already handles the business logic, wire legacy callers to it via route attributes or thin redirect controllers — never copy-paste the logic into a parallel endpoint.
+8. **No phantom or unreferenced routes** — every route an endpoint exposes must be actively called by a known client. Do not use multiple class-level `[Route]` attributes that generate combinatorial routes nobody calls. Use absolute route templates (e.g., `[HttpPost("/api/auth/login")]`) when an action must be reachable at a path outside its controller's primary route prefix. Before adding a route, confirm at least one client references it.
+9. **Dynamics API contract serialization rules** — contracts sent to the Dynamics 365 REST API must not inherit from `XppObjectBase`. The `XppObjectBase` is a god object with 100+ properties that pollutes serialized payloads and causes `XppServicesDeserializationException` on the Dynamics side. When creating or modifying contracts for Dynamics: (a) never inherit from `XppObjectBase` — define only the properties the contract needs directly, (b) all enum properties must be non-nullable so they serialize as integers (e.g., `0`) rather than `null` — Dynamics cannot deserialize `null` into X++ enums, (c) match the legacy WCF payload format, (d) `DateTime` fields default to `0001-01-01T00:00:00` (C# default) not null, (e) string properties may be null.
 
 ## 7) Security and Compliance Rules
 
@@ -66,6 +76,7 @@ These rules are mandatory for all feature work, bug fixes, and refactors in this
 10. **High: Enforce tenant isolation in all CQRS queries** — filter by `ICurrentUserService.TenantId`.
 11. **Medium: Use `IHttpClientFactory` instead of `new HttpClient()`** — prevents socket exhaustion.
 12. **Medium: Apply rate limiting to OTP endpoints** — prevents email/SMS flooding.
+13. **Vet all dependencies before adoption** — before adding any NuGet package or npm dependency: (a) verify it exists on the official package registry (nuget.org, npmjs.com), (b) confirm the publisher/organization is legitimate, (c) check for known CVEs or security advisories, (d) review the package's download count, maintenance activity, and last publish date, (e) prefer packages with a clear license (MIT, Apache 2.0). Do not blindly trust AI-suggested package names — they may not exist or may be typosquatted.
 
 ## 8) UI and Design System Rules
 
@@ -74,14 +85,14 @@ Rules below are derived from the design system and apply to all presentation scr
 1. Follow the White-Labeled Enterprise UI direction: premium, authoritative, high-signal layouts.
 2. Apply the no-line rule for sectioning: use tonal surface layering instead of border-heavy grids.
 3. Use dynamic brand colors from appsettings/configuration; avoid hard-coded palette divergence.
-4. Keep typography aligned to the project font hierarchy for both display and dense operational data.
+4. Keep typography aligned to Libre Franklin hierarchy for both display and dense operational data.
 5. Prefer atmospheric depth with gradients, surface tiers, and subtle shadow tinting over flat blocks.
 6. Maintain responsive behavior for desktop and mobile without collapsing readability.
 7. **No scoped `.razor.css` files and no `<style>` blocks in `.razor` components** — use only MudBlazor component API (props, variant, style classes, inline `Style=`) for all styling. Exception: global `wwwroot/app.css` only for baseline/framework-level styles (not component-specific). Never embed CSS directly in `.razor` files; all styling must be applied through component attributes or global stylesheets.
 8. **No hardcoded colors anywhere in `.razor` or `.cs` files** — all color values must come from `BrandingConfig` (injected via `IOptions<BrandingConfig>`) or MudBlazor theme CSS variables (`var(--mud-palette-*)`). This ensures white-labeling and automatic dark/light mode compliance.
 9. **Consult MudBlazor component API first** — before implementing any component styling or behavior, review the official MudBlazor documentation (https://mudblazor.com/docs/overview) for native props/features. Use MudBlazor's built-in theming, size/color enums, variant/density controls, and spacing utilities. Only fall back to inline `Style=` when MudBlazor provides no alternative.
 10. **Separate markup and logic in new components** — create `.razor.cs` code-behind files for component logic, parameters, lifecycle, and event handlers. Keep `.razor` files focused on the view template. This improves readability, testability, and maintainability. Example: `MyComponent.razor` + `MyComponent.razor.cs`.
-11. **Use 3-branch rendering pattern for async data flows** — all components that load data asynchronously must follow a consistent three-state rendering pattern: (1) Loading state with `MudProgressCircular` or `MudProgressLinear`, (2) Data state with populated content and controls (only rendered when data is present), (3) Empty state with `MudAlert` or icon-based messaging. This ensures responsive UX feedback and eliminates visual jank or blank screens. Implement via `@if (Loading) { ... } else if (Data.Any()) { ... } else { ... }` in the `.razor` template.
+11. **Use the 4-branch rendering pattern for Interactive Server async data flows** — see Section 19 for the authoritative specification. All Interactive Server components (with `@rendermode InteractiveServer`) that load data asynchronously must render four states in order: Loading, HasError, HasSourceData, Empty. SSR-only pages use the 2-branch pattern (HasData / Empty).
 12. **Filter UX must remain recoverable** — for searchable/filterable tables, render toolbars/search inputs based on the unfiltered source collection (for example `_data.Any()`), not filtered results. When a filter returns zero matches, keep the table shell and controls visible and rely on `NoRecordsContent` (or equivalent in-table empty messaging) so users can clear/adjust filters without getting trapped in page-level empty states.
 
 ## 9) Performance and Caching Rules
@@ -114,10 +125,10 @@ Rules below are derived from the design system and apply to all presentation scr
 2. Do not refactor unrelated areas while implementing targeted fixes.
 3. Keep naming, formatting, and coding style aligned with surrounding code.
 4. Document new conventions in docs only when behavior or standards materially change.
-5. Prefer explicit typing and return types: avoid `var` and `void`; use them only as a last resort when no clear alternative exists.
+5. Prefer explicit typing and return types: avoid `void`; **never use `var`** — always declare the explicit type. This applies to all declarations including loop variables, LINQ results, and `new` expressions.
 6. Prefer .NET-native and Blazor-native implementations; use JavaScript only as a last resort when there is no practical framework-supported alternative.
 7. No nested syntax: prefer flat, readable structures with guard clauses and early returns instead of deeply nested conditionals, loops, or list hierarchies.
-8. AI agent compliance check is mandatory: before finalizing changes, verify the implementation aligns with `.github/copilot-instructions.md`, all relevant guidance under `.github/skills/`, and applicable guidance in `docs/`.
+8. AI agent compliance check is mandatory: before finalizing changes, verify the implementation aligns with `.github/copilot-instructions.md`, all relevant guidance under `.github/skills/`, and applicable guidance in `docs/`. **When a compliance check is run, also audit dependencies and security**: (a) verify all packages in `.csproj` / `packages.lock.json` are from known, legitimate publishers, (b) check for outdated or unmaintained dependencies (last publish > 12 months), (c) scan for known vulnerabilities (CVEs, security advisories) against current dependency versions, (d) confirm no secrets, API keys, or credentials are hardcoded in source or config files, (e) validate that all network calls use HTTPS, timeouts, and input validation, (f) ensure error messages do not leak internal details (stack traces, raw error descriptions, file paths).
 9. Prefer `async Task`/`async Task<T>` over `async void`/`void` by default. Use `async void`/`void` only for framework-required event handlers.
 10. Use generics for reusable, type-safe abstractions; avoid duplicated type-specific implementations when a constrained generic design is appropriate.
 11. Keep code simple and straightforward. Avoid complex or clever patterns when a clear, direct implementation can meet the requirement.
@@ -130,6 +141,7 @@ Rules below are derived from the design system and apply to all presentation scr
 18. For immutable Domain records used by forms, define a static factory on the record itself (for example `CreateEmpty()`) and consume that from UI code instead of creating local page-level `CreateEmptyModel` helpers.
 19. **If hardcoded mock/placeholder data is found in components or pages, treat it as temporary image-to-code scaffolding and replace it before completion** — UI generation from designs may introduce sample text, dates, names, or numeric values, but these must not ship. Replace with parameterized bindings, service calls, or empty-state defaults; if backend wiring is pending, use clearly marked `// TODO:` stubs that return empty collections.
 20. **Avoid unnecessary `if` statements** — do not wrap code in conditionals when the condition is always true, when a single expression or null-coalescing operator suffices, or when the branch adds no distinct behavior. Prefer ternary expressions, pattern matching, null-coalescing (`??`/`??=`), and early returns over redundant conditional blocks.
+21. **Code is liability, not an asset.** Every line added must justify its existence. Prefer deleting code over adding it, and always pursue the smallest diff that solves the problem. If a feature can be achieved by removing or simplifying existing code instead of writing new code, do that.
 
 ## 13) Architecture Layers & Responsibilities
 
@@ -218,7 +230,9 @@ These rules ensure that production incidents can be diagnosed and resolved quick
 
 ## 19) Gold Standard State Management for Blazor Components
 
-**Mandatory pattern** for all components that fetch and display data. This establishes consistent, production-grade behavior across the entire presentation layer.
+**Mandatory pattern** for Interactive Server components that fetch and display data. This establishes consistent, production-grade behavior for interactive pages across the presentation layer.
+
+> **Scope:** This pattern applies **only** to pages/components that use `@rendermode InteractiveServer`. For SSR-only pages, data is fetched once in `OnInitializedAsync` with no client-side re-rendering. Do **not** add Loading/HasError state branches to SSR-only pages; they render a single pass after `OnInitializedAsync` completes, making the Loading flag invisible to users.
 
 ### State Structure (Required Elements)
 
@@ -283,7 +297,7 @@ else
 7. **Always show "Try Again" button** in error state
 8. **Always initialize collections to `new()`** — never leave them null
 9. **Always use `@key` only for large dynamic lists** — avoid unnecessary directives
-10. **Never use `StateHasChanged()`** — let Blazor handle rendering automatically
+10. **Never call `StateHasChanged()` manually** — Blazor re-renders automatically after lifecycle methods and event handlers
 11. **For filterable grids, never gate toolbar/table visibility on filtered rows** — use source-data availability for branch selection and in-table `NoRecordsContent` for zero-match filters.
 
 ### Anti-Patterns (Explicitly Forbidden)
