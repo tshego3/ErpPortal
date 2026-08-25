@@ -5,7 +5,6 @@
 			"name": "ErpPortal",
 			"type": "coreclr",
 			"request": "launch",
-			"preLaunchTask": "build-all",
 			"program": "${workspaceFolder}/ErpPortal/bin/Debug/net10.0/ErpPortal.dll",
 			"args": [],
 			"cwd": "${workspaceFolder}/ErpPortal",
@@ -13,13 +12,18 @@
 			"env": {
 				"ASPNETCORE_ENVIRONMENT": "Development",
 				"ASPNETCORE_URLS": "https://localhost:5001"
+			},
+			"serverReadyAction": {
+				"action": "startDebugging",
+				"name": "Edge (Guest)",
+				"pattern": "\\bNow listening on:\\s+(https?://\\S+)",
+				"killOnServerStop": true
 			}
 		},
 		{
 			"name": "ErpPortal.Api",
 			"type": "coreclr",
 			"request": "launch",
-			"preLaunchTask": "build-all",
 			"program": "${workspaceFolder}/ErpPortal.Api/bin/Debug/net10.0/ErpPortal.Api.dll",
 			"args": [],
 			"cwd": "${workspaceFolder}/ErpPortal.Api",
@@ -28,12 +32,65 @@
 				"ASPNETCORE_ENVIRONMENT": "Development",
 				"ASPNETCORE_URLS": "https://localhost:5002"
 			}
+		},
+		{
+			"name": "ErpPortal (solo)",
+			"type": "coreclr",
+			"request": "launch",
+			"preLaunchTask": "build-erpportal",
+			"program": "${workspaceFolder}/ErpPortal/bin/Debug/net10.0/ErpPortal.dll",
+			"args": [],
+			"cwd": "${workspaceFolder}/ErpPortal",
+			"stopAtEntry": false,
+			"env": {
+				"ASPNETCORE_ENVIRONMENT": "Development",
+				"ASPNETCORE_URLS": "https://localhost:5001"
+			},
+			"serverReadyAction": {
+				"action": "startDebugging",
+				"name": "Edge (Guest)",
+				"pattern": "\\bNow listening on:\\s+(https?://\\S+)",
+				"killOnServerStop": true
+			}
+		},
+		{
+			"name": "ErpPortal.Api (solo)",
+			"type": "coreclr",
+			"request": "launch",
+			"preLaunchTask": "build-erpportal-api",
+			"program": "${workspaceFolder}/ErpPortal.Api/bin/Debug/net10.0/ErpPortal.Api.dll",
+			"args": [],
+			"cwd": "${workspaceFolder}/ErpPortal.Api",
+			"stopAtEntry": false,
+			"env": {
+				"ASPNETCORE_ENVIRONMENT": "Development",
+				"ASPNETCORE_URLS": "https://localhost:5002"
+			}
+		},
+		{
+			// Launched automatically by the ErpPortal configurations via serverReadyAction.
+			// Guest mode gives a throwaway profile (no cookies/extensions carried over) and
+			// the browser is closed when the ErpPortal debug session stops.
+			"name": "Edge (Guest)",
+			"type": "msedge",
+			"request": "launch",
+			"url": "https://localhost:5001",
+			"runtimeArgs": [
+				"--guest",
+				"--no-first-run",
+				"--no-default-browser-check"
+			],
+			"cleanUp": "wholeBrowser",
+			"presentation": {
+				"hidden": true
+			}
 		}
 	],
 	"compounds": [
 		{
 			"name": "ErpPortal + ErpPortal.Api",
 			"configurations": ["ErpPortal", "ErpPortal.Api"],
+			"preLaunchTask": "build-all",
 			"stopAll": true
 		}
 	]
