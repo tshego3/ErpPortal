@@ -8,23 +8,38 @@
 			"args": [
 				"build",
 				"-p:UseSharedCompilation=false",
-				"ErpPortal.Api\\ErpPortal.Api.csproj"
+				"ErpPortal\\ErpPortal.csproj"
 			],
 			"isBackground": false,
 			"problemMatcher": [
 				"$msCompile"
 			],
 			"group": "build",
-			"dependsOn": "build-api-debug"
+			"dependsOn": "build-erpportal-api"
 		},
 		{
-			"label": "build-api-debug",
+			"label": "build-erpportal",
 			"type": "shell",
 			"command": "dotnet",
 			"args": [
 				"build",
 				"-p:UseSharedCompilation=false",
 				"ErpPortal\\ErpPortal.csproj"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build-erpportal-api",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"build",
+				"-p:UseSharedCompilation=false",
+				"ErpPortal.Api\\ErpPortal.Api.csproj"
 			],
 			"isBackground": false,
 			"problemMatcher": [
