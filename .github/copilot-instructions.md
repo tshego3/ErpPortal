@@ -3,6 +3,7 @@
 These rules are mandatory for all feature work, bug fixes, and refactors in this repository.
 
 > **Quick navigation:** For a specific task, focus on the relevant section: Security (7), UI (8), Architecture (13–14), Testing (10). The Decision Guide below determines which rendering pattern applies.
+> **Skills:** Detailed guidance lives under `.agents/skills/` — **global-rules** (engineering rules), **gold-standard-state** (code templates, 4-branch/2-branch state patterns, testing), **design-system** (MudBlazor tokens and styling), **project-expert** (delivery skills). Durable decisions are recorded there, not in agent memory.
 
 > **Decision guide — which pattern applies?**
 > - **Interactive Server pages** (greenfield features with `@rendermode InteractiveServer`): follow Section 19 Gold Standard (4-branch: Loading → Error → Data → Empty).
@@ -60,7 +61,7 @@ These rules are mandatory for all feature work, bug fixes, and refactors in this
 6. **Legacy integration compatibility is mandatory** — when modernizing legacy routes, preserve old endpoint paths, request body contracts, and response shapes through backward-compatible adapters/aliases so existing integrations continue working unchanged.
 7. **No duplicate APIs for legacy compatibility** — do not create separate controllers or action methods that duplicate existing functionality just to serve legacy routes. Instead, add legacy route aliases (e.g., `[HttpPost("/User/Login")]`) directly on the existing controller actions so that both old and new paths resolve to the same implementation. When an existing API already handles the business logic, wire legacy callers to it via route attributes or thin redirect controllers — never copy-paste the logic into a parallel endpoint.
 8. **No phantom or unreferenced routes** — every route an endpoint exposes must be actively called by a known client. Do not use multiple class-level `[Route]` attributes that generate combinatorial routes nobody calls. Use absolute route templates (e.g., `[HttpPost("/api/auth/login")]`) when an action must be reachable at a path outside its controller's primary route prefix. Before adding a route, confirm at least one client references it.
-9. **Dynamics API contract serialization rules** — contracts sent to the Dynamics 365 REST API must not inherit from `XppObjectBase`. The `XppObjectBase` is a god object with 100+ properties that pollutes serialized payloads and causes `XppServicesDeserializationException` on the Dynamics side. When creating or modifying contracts for Dynamics: (a) never inherit from `XppObjectBase` — define only the properties the contract needs directly, (b) all enum properties must be non-nullable so they serialize as integers (e.g., `0`) rather than `null` — Dynamics cannot deserialize `null` into X++ enums, (c) match the legacy WCF payload format, (d) `DateTime` fields default to `0001-01-01T00:00:00` (C# default) not null, (e) string properties may be null.
+9. **Upstream contract serialization rules** — contracts sent to upstream REST services must define only the properties the contract needs, each with an explicit concrete type (never `object`/`dynamic`); enum-typed properties must be non-nullable so they serialize as values rather than `null`; match the upstream payload shape exactly; string properties may be null; `DateTime` fields default to `0001-01-01T00:00:00` (C# default) not null.
 
 ## 7) Security and Compliance Rules
 
@@ -73,7 +74,7 @@ These rules are mandatory for all feature work, bug fixes, and refactors in this
 7. **Critical: JWT secrets must be stored in User Secrets locally and Azure Key Vault in production.**
 8. **High: Implement magic byte validation for file uploads** — do not rely on client Content-Type header.
 9. **High: Restrict CORS to specific origins** — never use `AllowAnyOrigin()` with credentials.
-10. **High: Enforce tenant isolation in all CQRS queries** — filter by `ICurrentUserService.TenantId`.
+10. **High: Enforce authorization and ownership checks in all data access** — a user may only read or mutate records they are entitled to; validate against the authenticated user context in every query path.
 11. **Medium: Use `IHttpClientFactory` instead of `new HttpClient()`** — prevents socket exhaustion.
 12. **Medium: Apply rate limiting to OTP endpoints** — prevents email/SMS flooding.
 13. **Vet all dependencies before adoption** — before adding any NuGet package or npm dependency: (a) verify it exists on the official package registry (nuget.org, npmjs.com), (b) confirm the publisher/organization is legitimate, (c) check for known CVEs or security advisories, (d) review the package's download count, maintenance activity, and last publish date, (e) prefer packages with a clear license (MIT, Apache 2.0). Do not blindly trust AI-suggested package names — they may not exist or may be typosquatted.
@@ -85,7 +86,7 @@ Rules below are derived from the design system and apply to all presentation scr
 1. Follow the White-Labeled Enterprise UI direction: premium, authoritative, high-signal layouts.
 2. Apply the no-line rule for sectioning: use tonal surface layering instead of border-heavy grids.
 3. Use dynamic brand colors from appsettings/configuration; avoid hard-coded palette divergence.
-4. Keep typography aligned to Libre Franklin hierarchy for both display and dense operational data.
+4. Keep typography aligned to the Libre Franklin hierarchy for both display and dense operational data.
 5. Prefer atmospheric depth with gradients, surface tiers, and subtle shadow tinting over flat blocks.
 6. Maintain responsive behavior for desktop and mobile without collapsing readability.
 7. **No scoped `.razor.css` files and no `<style>` blocks in `.razor` components** — use only MudBlazor component API (props, variant, style classes, inline `Style=`) for all styling. Exception: global `wwwroot/app.css` only for baseline/framework-level styles (not component-specific). Never embed CSS directly in `.razor` files; all styling must be applied through component attributes or global stylesheets.
@@ -128,7 +129,7 @@ Rules below are derived from the design system and apply to all presentation scr
 5. Prefer explicit typing and return types: avoid `void`; **never use `var`** — always declare the explicit type. This applies to all declarations including loop variables, LINQ results, and `new` expressions.
 6. Prefer .NET-native and Blazor-native implementations; use JavaScript only as a last resort when there is no practical framework-supported alternative.
 7. No nested syntax: prefer flat, readable structures with guard clauses and early returns instead of deeply nested conditionals, loops, or list hierarchies.
-8. AI agent compliance check is mandatory: before finalizing changes, verify the implementation aligns with `.github/copilot-instructions.md`, all relevant guidance under `.github/skills/`, and applicable guidance in `docs/`. **When a compliance check is run, also audit dependencies and security**: (a) verify all packages in `.csproj` / `packages.lock.json` are from known, legitimate publishers, (b) check for outdated or unmaintained dependencies (last publish > 12 months), (c) scan for known vulnerabilities (CVEs, security advisories) against current dependency versions, (d) confirm no secrets, API keys, or credentials are hardcoded in source or config files, (e) validate that all network calls use HTTPS, timeouts, and input validation, (f) ensure error messages do not leak internal details (stack traces, raw error descriptions, file paths).
+8. AI agent compliance check is mandatory: before finalizing changes, verify the implementation aligns with `.github/copilot-instructions.md`, all relevant guidance under `.agents/skills/` and `.github/skills/`, and applicable guidance in `docs/`. **When a compliance check is run, also audit dependencies and security**: (a) verify all packages in `.csproj` are from known, legitimate publishers, (b) check for outdated or unmaintained dependencies (last publish > 12 months), (c) scan for known vulnerabilities (CVEs, security advisories) against current dependency versions, (d) confirm no secrets, API keys, or credentials are hardcoded in source or config files, (e) validate that all network calls use HTTPS, timeouts, and input validation, (f) ensure error messages do not leak internal details (stack traces, raw error descriptions, file paths).
 9. Prefer `async Task`/`async Task<T>` over `async void`/`void` by default. Use `async void`/`void` only for framework-required event handlers.
 10. Use generics for reusable, type-safe abstractions; avoid duplicated type-specific implementations when a constrained generic design is appropriate.
 11. Keep code simple and straightforward. Avoid complex or clever patterns when a clear, direct implementation can meet the requirement.
@@ -147,33 +148,31 @@ Rules below are derived from the design system and apply to all presentation scr
 
 **Dependency flow (each layer references only layers below it):**
 ```markdown
-Presentation  ──HTTP──►  API  ──MediatR──►  Application  ──►  Domain
-                          │                       │
-                          └─────────────────►  Infrastructure
+Presentation (Components)  ──DI──►  Core Contracts  ◄──implemented by──  Infrastructure
+        │                                     ▲                              │
+        └────Controllers (write-path)────────┘                    IErpHttpClient ──► ErpPortal.Api / upstream REST
 ```
 
 | Layer | Responsibility | Key Files |
 |-------|---|---|
-| **Domain** | Pure business entities, value objects, domain exceptions. **Zero framework dependencies.** | `Entities/`, `Exceptions/`, `Events/`, `ValueObjects/` |
-| **Application** | CQRS commands/queries (MediatR), DTOs, validation rules (FluentValidation), pipeline behaviours. References Domain only. | `Features/[Entity]/{Commands,Queries}`, `Common/Interfaces/` |
-| **Infrastructure** | EF Core DbContext, migrations, external service implementations (blob storage, email, etc.). Implements Application interfaces. | `Persistence/`, `Services/`, `Seeding/` |
-| **Infrastructure.Shared** | Cross-cutting infrastructure — white-label branding, configuration. | `Branding/` |
-| **API** | ASP.NET Core controllers, middleware, JWT/cookie auth, dependency injection setup. Dispatches via MediatR. **Must apply `[Authorize]` on data endpoints.** | `Controllers/`, `Middleware/`, `Program.cs` |
-| **Presentation** | Blazor Web App (SSR + Interactive Server), typed HttpClient API clients, Razor pages, authentication state. **Never reference Domain or Application directly — only call the API via HTTP.** | `Components/Pages/`, `Services/`, `Program.cs` |
-| **Tests** | xUnit unit + integration tests. Mirrors Application folder structure. Use EF Core InMemory, never mock `DbSet<T>`. | `Features/[Entity]/{Commands,Queries}/` |
+| **Core** | Pure domain records, contract interfaces, validated config options, `AppException`. **Zero framework dependencies** beyond logging abstractions. | `Domain/`, `Contracts/`, `Config/`, `Exceptions/` |
+| **Infrastructure** | Typed HTTP client (`ErpHttpClient`) + delegating handlers (`AuthTokenHandler`, `ErrorHandlingHandler`), repositories implementing Core contracts, app services (`AuthService`, `LayoutService`, notifications). | `Http/`, `Repositories/`, `Services/` |
+| **Presentation** | Blazor Web App (SSR-only by default, Interactive Server opt-in), MudBlazor UI, Razor pages/components. Calls Core contracts only — never constructs HTTP clients or contains business rules. | `Components/Pages/`, `Components/Layout/`, `Program.cs` |
+| **Controllers** | Thin MVC write-path endpoints for flows needing cookie header writes and antiforgery (login/logout). Delegate to services/repositories; `[Authorize]` data endpoints. | `Controllers/AccountController.cs` |
+| **ErpPortal.Api** | API gateway fronting upstream REST services; its own minimal Core/Infrastructure folders. | `Program.cs`, `Core/`, `Infrastructure/` |
+| **Tests** | xUnit unit tests with Moq + FluentAssertions. Mock Core contracts; never real HTTP in unit tests. | `Tests/` |
 
 ## 14) Adding a New Feature (Full Checklist)
 
 Quick outline:
 
-1. **Domain** — Create entity inheriting `AuditableEntity`
-2. **Application** — Add `DbSet<Entity>` to `IApplicationDbContext`; create CQRS commands/queries
-3. **Infrastructure** — Register `DbSet<Entity>` in `MockApplicationDbContext`
-4. **API** — Create controller with `[Authorize]`, delegate to MediatR
-5. **Presentation** — Create typed `BaseApiClient` subclass and Blazor pages
-6. **Tests** — Add xUnit handler/validator tests using InMemory database
+1. **Core** — Define the immutable domain record in `Core/Domain`; add or extend the contract interface in `Core/Contracts`
+2. **Infrastructure** — Implement a repository behind the contract using `IErpHttpClient`; add an output-cache policy if read-heavy
+3. **Presentation** — Create the Blazor page under `Components/Pages/<Area>/`; SSR-only pages use the 2-branch pattern, Interactive Server pages the 4-branch Gold Standard pattern
+4. **Controllers** — Only when header writes or antiforgery form posts are required; keep thin and redirect with error codes
+5. **Tests** — Add xUnit tests mocking the contract interfaces (`NullLogger<T>` for loggers)
 
-**Everything auto-wires** through `Program.cs` DI and MediatR assembly scanning — no manual registration needed for handlers/validators.
+**Everything auto-wires** through one `AddScoped<IContract, Implementation>()` line in `Program.cs` DI — no other registration needed.
 
 ## 15) NASA JPL "Power of 10" Adaptation for C#
 
@@ -327,4 +326,4 @@ See **SKILL.md** for complete implementation examples, code patterns, and detail
 
 ### Reference
 
-For comprehensive implementation guidance including complete code examples, Razor templates, testing patterns, and detailed anti-patterns, see **skills/SKILL.md** section "Gold Standard State Management for Blazor Components".
+For comprehensive implementation guidance including complete code examples, Razor templates, testing patterns, and detailed anti-patterns, see **`.github/skills/SKILL.md`** section "Gold Standard State Management for Interactive Server Components" and the copy-paste templates in **`.agents/skills/gold-standard-state/SKILL.md`** (which also covers the SSR-only 2-branch variant).
