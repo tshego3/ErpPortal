@@ -21,34 +21,32 @@ All other rules in this document elaborate on these principles.
 This project uses **Clean Architecture** with strict layer boundaries. Each layer may only reference layers **below** it:
 
 ```
-Domain (entities, pure logic) — NO dependencies
+Core (domain records, contracts, config options, exceptions) — NO framework dependencies
     ↑
-Application (CQRS, DTOs, validation) — references Domain
+Infrastructure (typed HTTP clients, delegating handlers, repositories, services) — implements Core contracts
     ↑
-Infrastructure (EF, services) — references Domain + Application
+Presentation (Blazor Components) — SSR pages calling Core contracts via DI
     ↑
-API (controllers, auth) — references all above; creates MediatR requests
+Controllers (MVC write-path endpoints: login/logout with antiforgery)
     ↑
-Presentation (Blazor, pages) — HTTP calls to API **ONLY** — never references Application/Domain
-    ↑
-Tests (xUnit, InMemory DB) — mirrors Application structure
+Tests (xUnit + Moq + FluentAssertions) — mock Core contracts
 ```
 
-**Golden rule:** Never bypass a layer. Business logic stays in Domain/Application; UI never contains logic.
+**Golden rule:** Never bypass a layer. Business logic stays behind Core contracts implemented in Infrastructure; UI never contains logic.
 
-**Domain type rule:** Never create entity, DTO, or record types outside `Domain`. All shared types (entities, classes, value objects) must be defined in Domain and referenced directly from any layer that needs them. Do not create local copies in Presentation, API, or any other layer.
+**Domain type rule:** Never create entity, DTO, or record types outside `Core/Domain`. All shared types (entities, records, value objects) must be defined in Core and referenced directly from any layer that needs them. Do not create local copies in Presentation, Controllers, or any other layer.
 
-For a complete walkthrough of adding a new entity, see the feature guide documentation.
+For a complete walkthrough of adding a new feature, see the feature checklist in `../copilot-instructions.md` (Section 14).
 
 ## Core Delivery Skills
 
-1. Implement full vertical features across Presentation, Application, Domain, Infrastructure, and tests.
-2. Work with Blazor Web App SSR (default) and Interactive Server components (greenfield features only) without breaking auth, antiforgery, or routing. Interactive Server is justified only when the feature requires real-time UI updates or sub-second feedback that cannot be achieved with form POST round-trips (e.g., collaborative editing, live dashboards, inline grid editing).
-3. Use dependency injection consistently through Program.cs registrations and constructor injection.
-4. Build reliable HTTP integrations through typed clients, delegating handlers, and centralized error handling.
+1. Implement full vertical features across Core, Infrastructure, Presentation/Controllers, and tests.
+2. Work with Blazor Web App SSR (default) and Interactive Server components (greenfield features only) without breaking auth, antiforgery, or Enhanced Navigation. Interactive Server is justified only when the feature requires real-time UI updates or sub-second feedback that cannot be achieved with form POST round-trips (e.g., collaborative editing, live dashboards, inline grid editing).
+3. Use dependency injection consistently through Program.cs registrations and constructor injection (`[Inject]` in components as the framework requires).
+4. Build reliable HTTP integrations through the typed `IErpHttpClient`, delegating handlers (`AuthTokenHandler`, `ErrorHandlingHandler`), and centralized `AppException` error translation.
 5. Keep architecture clean by preserving boundaries between domain logic, infrastructure, and UI.
 6. Apply the project design system consistently with MudBlazor and brand configuration from appsettings.
-7. Perform a mandatory compliance pass before completion: confirm changes align with `.github/copilot-instructions.md`, relevant `.github/skills/` guidance, and applicable standards in `docs/`.
+7. Perform a mandatory compliance pass before completion: confirm changes align with `.github/copilot-instructions.md`, relevant guidance under `.github/skills/` and `.agents/skills/`, and applicable standards in `docs/`.
 
 ## Blazor SSR Interaction Skills
 
@@ -69,16 +67,16 @@ For a complete walkthrough of adding a new entity, see the feature guide documen
 
 ## Data and Domain Skills
 
-1. Add and evolve domain entities without leaking infrastructure concerns into domain classes.
+1. Add and evolve immutable domain records in `Core/Domain` without leaking infrastructure concerns into them.
 2. Extend repository implementations while preserving repository contracts.
-3. Keep DTO mapping and API access isolated in infrastructure and application layers.
-4. Use output caching intentionally and invalidate by tag when needed.
+3. Keep DTO mapping and API access isolated in the infrastructure layer.
+4. Use output caching intentionally (tagged policies such as `UsersList`, `TodosList`) and invalidate by tag when needed.
 
 ## UI and Design System Skills
 
 1. Implement layouts that feel premium and enterprise-grade, not generic dashboard boilerplate.
 2. Follow the no-line sectioning rule: prefer tonal surfaces over 1px border-heavy composition.
-3. Keep typography aligned with Libre Franklin hierarchy and high-density data readability.
+3. Keep typography aligned with the Libre Franklin hierarchy and high-density data readability. Libre Franklin is the only permitted font family — override MudBlazor's Roboto default on every typography variant; never treat the typeface as a white-label override point.
 4. Read brand colors from configuration; avoid hard-coded color drift from the design system.
 5. Do not use scoped `.razor.css` files or `<style>` blocks in `.razor` components for styling; prefer MudBlazor component API and global baseline styles only.
 6. Do not hardcode colors in `.razor` or `.cs`; use `BrandingConfig` and MudBlazor theme variables (`var(--mud-palette-*)`).
@@ -129,145 +127,114 @@ For the comprehensive design system specification (color tokens, typography scal
 
 ## Practical Development Patterns
 
-### Domain Entity Pattern
+### Domain Record Pattern
 
 ```csharp
-// Domain/Entities/Product.cs — no dependencies, pure logic
-public class Product : AuditableEntity
-{
-    public string Name { get; set; } = null!;
-    public string? Description { get; set; }
-    public decimal Price { get; set; }
-    public bool IsActive { get; set; } = true;
-    
-    // Domain guard clauses (pure logic, testable without EF)
-    public bool IsAvailable() => IsActive && Price > 0;
-}
+// Core/Domain/User.cs — no dependencies, immutable, explicit types
+public sealed record User(
+    int Id,
+    string Username,
+    string Email,
+    string FirstName,
+    string LastName,
+    string Image,
+    [property: JsonPropertyName("accessToken")] string? Token = null);
 ```
 
-### CQRS Command Pattern
+### Contract + Repository Pattern
 
 ```csharp
-// Application/Features/Products/Commands/CreateProduct/CreateProductCommand.cs
-// Command + Handler + Validator all in ONE file
-
-public sealed class CreateProductCommand : IRequest<Result<Guid>>
+// Core/Contracts/IRepository.cs — all I/O behind an interface
+public interface IRepository<T> where T : class
 {
-    public string Name { get; set; } = null!;
-    public string? Description { get; set; }
-    public decimal Price { get; set; }
+    Task<(IReadOnlyList<T> Data, int Total)> GetAllAsync(int skip = 0, int limit = 50, CancellationToken ct = default);
+    Task<T?> GetByIdAsync(int id, CancellationToken ct = default);
 }
 
-public sealed class CreateProductCommandValidator : AbstractValidator<CreateProductCommand>
+// Infrastructure/Repositories/TodoRepository.cs — implements the contract over IErpHttpClient
+public sealed class TodoRepository(IErpHttpClient http, ILogger<TodoRepository> logger, INotificationService notifier)
+    : IRepository<Todo>
 {
-    public CreateProductCommandValidator()
+    public async Task<(IReadOnlyList<Todo> Data, int Total)> GetAllAsync(
+        int skip = 0, int limit = 150, CancellationToken ct = default)
     {
-        RuleFor(c => c.Name)
-            .NotEmpty().WithMessage("Name is required.")
-            .MaximumLength(200).WithMessage("Name must not exceed 200 characters.");
-
-        RuleFor(c => c.Description)
-            .MaximumLength(1000).WithMessage("Description must not exceed 1000 characters.");
-
-        RuleFor(c => c.Price)
-            .GreaterThan(0).WithMessage("Price must be greater than zero.");
+        logger.LogInformation("Fetching todos skip {Skip} limit {Limit}.", skip, limit);   // intent before
+        TodosApiResponse response = await http.GetAsync<TodosApiResponse>(
+            $"/todos?limit={limit}&skip={skip}", ct);
+        logger.LogInformation("Fetched {Total} todos.", response.Total);                   // outcome after
+        return (response.Todos, response.Total);
     }
+
+    // GetByIdAsync / CreateAsync / UpdateAsync / DeleteAsync follow the same shape:
+    // guard clauses → typed call via IErpHttpClient → log outcome → user-safe notification
 }
 
-public sealed class CreateProductCommandHandler : IRequestHandler<CreateProductCommand, Result<Guid>>
+internal sealed record TodosApiResponse(List<Todo> Todos, int Total);
+```
+
+Register it once and DI wires everything:
+
+```csharp
+// Program.cs
+builder.Services.AddScoped<IRepository<Todo>, TodoRepository>();
+```
+
+### Write-Path Controller Pattern
+
+```csharp
+// Controllers/AccountController.cs — used ONLY for flows needing cookie header writes + antiforgery
+[Route("account")]
+public sealed class AccountController(IErpHttpClient http, ILogger<AccountController> logger) : Controller
 {
-    private readonly IApplicationDbContext _context;
-    private readonly ILogger<CreateProductCommandHandler> _logger;
-
-    public CreateProductCommandHandler(
-        IApplicationDbContext context,
-        ILogger<CreateProductCommandHandler> logger)
+    [HttpPost("login")]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Login([FromForm] LoginForm model, CancellationToken ct)
     {
-        _context = context;
-        _logger = logger;
-    }
+        if (!ModelState.IsValid)
+            return Redirect("/login?error=invalid");
 
-    public async Task<Result<Guid>> Handle(
-        CreateProductCommand request, CancellationToken cancellationToken)
-    {
-        Product product = new Product
+        try
         {
-            Name = request.Name,
-            Description = request.Description,
-            Price = request.Price,
-            CreatedAt = DateTime.UtcNow,
-            CreatedBy = "System" // Should come from ICurrentUserService in real code
-        };
+            User user = await _http.PostAsync<User>("/auth/login",
+                new { username = model.Username, password = model.Password }, ct);
 
-        _context.Products.Add(product);
-        await _context.SaveChangesAsync(cancellationToken);
+            List<Claim> claims =
+            [
+                new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                new(ClaimTypes.Name, user.Username),
+                new("Token", user.Token ?? string.Empty),
+                // … remaining claims
+            ];
 
-        _logger.LogInformation("Product {ProductId} created.", product.Id);
-        return Result<Guid>.Success(product.Id);
+            ClaimsPrincipal principal = new(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
+            await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal,
+                new AuthenticationProperties { IsPersistent = model.RememberMe });
+            return Redirect("/dashboard");
+        }
+        catch (AppException ex)
+        {
+            string reason = ex.StatusCode switch { 401 => "invalid", 403 => "blocked", 0 => "unreachable", _ => "failed" };
+            return Redirect($"/login?error={reason}");   // user-safe codes, never raw exception text
+        }
     }
 }
 ```
 
-### API Controller Pattern
+### Typed HTTP Client Pattern
 
 ```csharp
-// Controllers/ProductsController.cs — MUST have [Authorize]
-[Authorize]  // REQUIRED — all data controllers must be authorized
-[Route("api/[controller]")]
-[ApiController]
-public class ProductsController : BaseApiController
+// Infrastructure/Http/ErpHttpClient.cs — registered via IHttpClientFactory with delegating handlers:
+// builder.Services.AddHttpClient<IErpHttpClient, ErpHttpClient>(…)
+//     .AddHttpMessageHandler<AuthTokenHandler>()      // attaches token; signs out on upstream 401
+//     .AddHttpMessageHandler<ErrorHandlingHandler>(); // translates failures to coded AppExceptions
+public async Task<T> GetAsync<T>(string url, CancellationToken ct = default) where T : class
 {
-    [HttpPost]
-    [ProducesResponseType(typeof(Guid), StatusCodes.Status201Created)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<Guid>> Create(CreateProductCommand command)
-    {
-        Result<Guid> result = await Mediator.Send(command);
-        return result.Succeeded
-            ? CreatedAtAction(nameof(GetById), new { id = result.Data }, result.Data)
-            : BadRequest(result.Errors);
-    }
-
-    [HttpGet]
-    [ResponseCache(Duration = 300, Location = ResponseCacheLocation.Client, VaryByQueryKeys = ["*"])]
-    public async Task<ActionResult<PaginatedResult<ProductDto>>> GetAll(
-        [FromQuery] GetAllProductsQuery query)
-    {
-        PaginatedResult<ProductDto> result = await Mediator.Send(query);
-        return Ok(result);
-    }
+    T? result = await _http.GetFromJsonAsync<T>(url, _jsonOptions, ct);
+    return result ?? throw new InvalidOperationException($"Null response from GET {url}");
 }
 ```
 
-### Typed API Client Pattern
-
-```csharp
-// Presentation/Services/ProductApiClient.cs
-public class ProductApiClient : BaseApiClient
-{
-    public ProductApiClient(HttpClient httpClient, ILogger<ProductApiClient> logger)
-        : base(httpClient, logger) { }
-
-    public Task<PaginatedList<ProductBriefDto>?> GetAllAsync(int pageNumber = 1, int pageSize = 10) =>
-        GetAsync<PaginatedList<ProductBriefDto>>(
-            $"api/products{BuildQueryString(new() { 
-                ["pageNumber"] = pageNumber.ToString(), 
-                ["pageSize"] = pageSize.ToString() 
-            })}");
-
-    public Task<ProductDetailDto?> GetByIdAsync(Guid id) =>
-        GetAsync<ProductDetailDto>($"api/products/{id}");
-
-    public Task<bool> CreateAsync(CreateProductRequest model) =>
-        PostAsync("api/products", model);
-
-    public Task<bool> UpdateAsync(UpdateProductRequest model) =>
-        PutAsync($"api/products/{model.Id}", model);
-
-    public Task<bool> DeleteAsync(Guid id) =>
-        DeleteAsync($"api/products/{id}");
-}
-```
+Delegating handlers own cross-cutting concerns; repositories never write try/catch-and-translate around status codes themselves.
 
 ### Interactive Server Page Pattern with 4-Branch State Management
 
@@ -469,7 +436,7 @@ public partial class YourComponentName
             .ToList();
 
     public int ResultCount => FilteredData.Count();
-    public bool HasResults => FilteredData.Any();
+    public bool HasSourceData => _data.Any();   // gate branches on source data, never the filtered count
 
     // ============ LIFECYCLE ============
     protected override async Task OnInitializedAsync()
@@ -603,7 +570,9 @@ else if (HasResults)
         Showing @ResultCount result@(ResultCount != 1 ? "s" : "")
     </MudText>
 
-    <!-- Data Table -->
+    <!-- Data Table — when a filter matches nothing, the in-table NoRecordsContent shows
+         the zero-match message plus a "Clear All Filters" button. A filter must never
+         collapse the page into Branch 4 and hide the controls needed to recover. -->
     <MudTable Items="@FilteredData" Hover="true" Breakpoint="Breakpoint.Sm" Dense="true">
         <HeaderContent>
             <MudTh>Name</MudTh>
@@ -630,43 +599,17 @@ else if (HasResults)
 }
 else
 {
-    <!-- BRANCH 4: EMPTY STATE -->
+    <!-- BRANCH 4: EMPTY STATE — reached only when the SOURCE collection is empty;
+         zero-match filters are handled inside Branch 3, never here -->
     <MudAlert Severity="Severity.Info" Icon="@Icons.Material.Filled.Info">
         <MudStack Row="false" Spacing="2">
-            <MudText Typo="Typo.body2">
-                @if (!string.IsNullOrEmpty(_searchText) || _selectedCategory != null)
-                {
-                    <span>No results match your filters.</span>
-                }
-                else
-                {
-                    <span>No items yet.</span>
-                }
-            </MudText>
-            <MudText Typo="Typo.caption">
-                @if (!string.IsNullOrEmpty(_searchText))
-                {
-                    <span>Try clearing your search or filters to see all items.</span>
-                }
-                else
-                {
-                    <span>Create your first item to get started.</span>
-                }
-            </MudText>
-            @if (!string.IsNullOrEmpty(_searchText) || _selectedCategory != null)
-            {
-                <MudButton Variant="Variant.Text" Size="Size.Small" Color="Color.Info" OnClick="ResetFilters">
-                    Clear All Filters
-                </MudButton>
-            }
-            else
-            {
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" 
-                    StartIcon="@Icons.Material.Filled.Add" Size="Size.Small"
-                    href="/your-component/create">
-                    Create Item
-                </MudButton>
-            }
+            <MudText Typo="Typo.body2">No items yet.</MudText>
+            <MudText Typo="Typo.caption">Create your first item to get started.</MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" 
+                StartIcon="@Icons.Material.Filled.Add" Size="Size.Small"
+                href="/your-component/create">
+                Create Item
+            </MudButton>
         </MudStack>
     </MudAlert>
 }
@@ -689,13 +632,13 @@ When implementing state management, enforce these non-negotiables:
 
 3. **Computed Properties**
    - Mark all filter/search results as computed (not cached) — recalculate on every render
-   - Use `@if (HasResults)` not `@if (_data.Any())` — centralize result logic in property
+   - Use `@if (HasSourceData)` not `@if (FilteredData.Any())` — branch selection follows the source collection; zero-match filters stay inside Branch 3 via in-table empty content
    - Never cache computed results in fields; always derive from source data
 
 4. **State Branches (Exact Order)**
    1. `@if (Loading)` — Show spinner
    2. `@else if (HasError)` — Show error + retry
-   3. `@else if (HasResults)` — Show table + controls
+   3. `@else if (HasSourceData)` — Show table + controls
    4. `@else` — Show empty state + guidance
 
 5. **Filtering & Search**
@@ -737,7 +680,7 @@ When implementing state management, enforce these non-negotiables:
 - DO NOT: Storing API result in a property that changes unexpectedly — use consistent data flow
 - DO NOT: Catching exceptions silently without logging — always log errors
 - DO NOT: Showing raw error messages to users — translate to safe, actionable messages
-- DO NOT: Rendering without checking `Loading`, `HasError`, or `HasResults` — always use 4 branches
+- DO NOT: Rendering without checking `Loading`, `HasError`, or `HasSourceData` — always use 4 branches
 - DO NOT: Mixing filter logic in the template — keep LINQ in code-behind
 - DO NOT: Forgetting to initialize state flags to safe defaults — assume first-load is always Loading
 - DO NOT: Hardcoding retry logic — provide a "Try Again" button in error state
@@ -830,94 +773,69 @@ public void FilteredData_WithActiveSearchText_ReturnsOnlyMatchingItems()
 
 ### Testing Pattern
 
-**Command Handler Test (xUnit + FluentAssertions + InMemory DB):**
+**Repository Test (xUnit + Moq + FluentAssertions):**
 
 ```csharp
+using ErpPortal.Core.Contracts;
+using ErpPortal.Core.Domain;
 using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 
-public sealed class CreateProductCommandHandlerTests
+public sealed class TodoRepositoryTests
 {
-    private static readonly ILogger<CreateProductCommandHandler> Logger =
-        NullLoggerFactory.Instance.CreateLogger<CreateProductCommandHandler>();
+    private readonly Mock<IErpHttpClient> _mockHttp = new();
 
-    private static MockApplicationDbContext CreateContext() =>
-        new(new DbContextOptionsBuilder<MockApplicationDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())  // ← isolation per test
-            .Options);
+    private TodoRepository CreateRepo() =>
+        new(_mockHttp.Object, NullLogger<TodoRepository>.Instance, new Mock<INotificationService>().Object);
 
     [Fact]
-    public async Task Handle_WithValidCommand_ReturnsSuccessWithNewGuid()
+    public async Task GetAllAsync_WithUpstreamResponse_ReturnsDataAndTotal()
     {
-        // Arrange
-        await using MockApplicationDbContext context = CreateContext();
-        CreateProductCommandHandler handler = new CreateProductCommandHandler(context, Logger);
-        CreateProductCommand command = new CreateProductCommand { Name = "Widget", Price = 9.99m };
+        // Arrange — mock the contract, never real HTTP
+        _mockHttp.Setup(h => h.GetAsync<TodosApiResponse>("/todos?limit=150&skip=0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new TodosApiResponse([new Todo(1, "Ship order", true, 7)], 1));
+        TodoRepository repo = CreateRepo();
 
         // Act
-        Result<Guid> result = await handler.Handle(command, CancellationToken.None);
+        (IReadOnlyList<Todo> data, int total) = await repo.GetAllAsync();
 
         // Assert
-        result.Succeeded.Should().BeTrue();
-        result.Data.Should().NotBe(Guid.Empty);
+        total.Should().Be(1);
+        data.Should().ContainSingle(t => t.Id == 1);
     }
 
     [Fact]
-    public async Task Handle_WithValidCommand_PersistsToDatabase()
+    public async Task GetAllAsync_WithNetworkFailure_ThrowsAppException()
     {
-        // Arrange
-        await using MockApplicationDbContext context = CreateContext();
-        CreateProductCommandHandler handler = new CreateProductCommandHandler(context, Logger);
-        CreateProductCommand command = new CreateProductCommand { Name = "Widget", Price = 9.99m };
+        _mockHttp.Setup(h => h.GetAsync<TodosApiResponse>(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Network failed"));
+        TodoRepository repo = CreateRepo();
 
-        // Act
-        Result<Guid> result = await handler.Handle(command, CancellationToken.None);
-
-        // Assert
-        Product? saved = await context.Products
-            .AsNoTracking()
-            .FirstOrDefaultAsync(p => p.Id == result.Data);
-
-        saved.Should().NotBeNull();
-        saved!.Name.Should().Be(command.Name);
-    }
-
-    [Fact]
-    public async Task Handle_WithEmptyName_ReturnsValidationFailure()
-    {
-        // Arrange
-        CreateProductCommandValidator validator = new CreateProductCommandValidator();
-        CreateProductCommand command = new CreateProductCommand { Name = "", Price = 9.99m };
-
-        // Act
-        FluentValidation.Results.ValidationResult result = await validator.ValidateAsync(command);
-
-        // Assert
-        result.IsValid.Should().BeFalse();
-        result.Errors.Should().Contain(e => e.PropertyName == nameof(CreateProductCommand.Name));
+        Func<Task> act = () => repo.GetAllAsync();
+        await act.Should().ThrowAsync<AppException>();
     }
 }
 ```
 
 **Testing Rules:**
-- Use `UseInMemoryDatabase(Guid.NewGuid().ToString())` per test for full isolation
-- Never mock `DbSet<T>` — use real in-memory context (Moq cannot intercept EF Core async methods)
-- Use `NullLoggerFactory` for `ILogger` — reduces noise and log is not a contract to assert
+- Mock the Core contracts (`IErpHttpClient`, `IRepository<T>`, `INotificationService`) — no real HTTP in unit tests
+- Use `NullLogger<T>` for `ILogger` — reduces noise and the log is not a contract to assert
 - Name tests `[Method]_[Scenario]_[ExpectedResult]` for readability
 - Assert one behaviour per test — easier diagnosis on failure
-- Use `await using MockApplicationDbContext context = CreateContext()` to ensure cleanup
+- Verify guard clauses reject invalid input before any HTTP call (`http.Verify(…, Times.Never)`)
+- Component tests instantiate the component with mocked `[Inject]` properties and call `OnInitializedAsync` directly (see Gold Standard tests above)
 
 ## Security & Compliance in Development
 
 When implementing features, always check security guidelines for:
 - **Critical:** JWT secrets, Auth attributes, CORS, health checks, file uploads
 - **High:** Log injection, HttpClient pooling, OTP rate limiting, CSP headers
-- **Medium:** Tenant isolation, ownership checks, caching strategy
+- **Medium:** Ownership checks, caching strategy
 
 **Key reminders when coding:**
 1. All data controllers **must** have `[Authorize]` attribute
-2. Tenant ID must be enforced in every CQRS query handler via `ICurrentUserService.TenantId`
+2. Enforce ownership/authorization checks in every data-access path — a user may only read or mutate records they are entitled to
 3. File uploads must validate magic bytes, not just `Content-Type` header
 4. Use `IHttpClientFactory` in services — never `new HttpClient()`
 5. JWT secrets must NOT be in `appsettings.json` — use User Secrets (dev) / Key Vault (prod)
@@ -928,8 +846,12 @@ When implementing features, always check security guidelines for:
 |----------|---------|
 | **copilot-instructions.md** | Core engineering rules, architecture layers, feature checklist |
 | **SKILL.md** (this file) | Agent capabilities, practical code patterns, testing strategies |
+| **`.agents/skills/global-rules/`** | Full engineering rules (platform, DI, auth, API, security, UI) |
+| **`.agents/skills/gold-standard-state/`** | Copy-paste templates: repository/client patterns, 4-branch + SSR 2-branch state, testing |
+| **`.agents/skills/design-system/`** | MudBlazor tokens, typography, spacing, component specs |
+| **`.agents/skills/project-expert/`** | Top 5 non-negotiables, delivery skills, agent knowledge rules |
 
 For fast onboarding, follow this path:
 1. Read **copilot-instructions.md** sections 13–14 for architecture + feature checklist
 2. Reference security guidelines when touching auth, data, or file handling
-3. Use the patterns in this document as copy-paste templates
+3. Use the patterns in this document and `.agents/skills/gold-standard-state/SKILL.md` as copy-paste templates
