@@ -71,6 +71,15 @@
 			// Launched automatically by the ErpPortal configurations via serverReadyAction.
 			// Guest mode gives a throwaway profile (no cookies/extensions carried over) and
 			// the browser is closed when the ErpPortal debug session stops.
+			//
+			// `--guest` and `userDataDir` are BOTH required, and neither works alone (measured on
+			// Edge with Edge already running): `--guest` alone opens the window but the new
+			// processes join the running browser's singleton, so `--remote-debugging-port` is
+			// ignored and the debugger fails with "Unable to launch browser"; `userDataDir` alone
+			// forks correctly but gives a throwaway *profile*, not a guest session. Together they
+			// fork a fresh process with a live DevTools port AND run the guest profile.
+			// userDataDir here is a temporary directory the debugger creates and `cleanUp`
+			// removes, so nothing is added to your real Edge profile list.
 			"name": "Edge (Guest)",
 			"type": "msedge",
 			"request": "launch",
@@ -80,10 +89,28 @@
 				"--no-first-run",
 				"--no-default-browser-check"
 			],
+			"userDataDir": true,
 			"cleanUp": "wholeBrowser",
 			"presentation": {
 				"hidden": true
 			}
+		},
+		{
+			// A guest browser session against an already-running ErpPortal. The ErpPortal
+			// configurations launch their own browser, so this is not wired to a serverReadyAction
+			// — pick it from the dropdown when you want a fresh window without restarting the app.
+			// Same two flags for the same reason as the hidden "Edge (Guest)" above.
+			"name": "Edge (Guest) [standalone]",
+			"type": "msedge",
+			"request": "launch",
+			"url": "https://localhost:5001",
+			"userDataDir": true,
+			"runtimeArgs": [
+				"--guest",
+				"--no-first-run",
+				"--no-default-browser-check"
+			],
+			"cleanUp": "wholeBrowser"
 		}
 	],
 	"compounds": [
